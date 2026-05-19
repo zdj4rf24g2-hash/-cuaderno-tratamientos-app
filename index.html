@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#165d9c">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Cuaderno Tratamientos">
+  <title>App Cuaderno de Tratamientos · V 2.0</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="apple-touch-icon.png">
+  <link rel="icon" href="favicon-192.png" sizes="192x192">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="appShell" class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <p class="brand-kicker">APP CUADERNO DE TRATAMIENTOS</p>
+        <h1>V 2.0</h1>
+      </div>
+      <button id="installHintBtn" class="ghost-mini" type="button" aria-label="Información de instalación">Instalar</button>
+    </header>
+
+    <section id="updateBanner" class="update-banner is-hidden" role="status" aria-live="polite">
+      <div>
+        <strong>Nueva versión disponible.</strong>
+        <span>Recarga para activar la actualización.</span>
+      </div>
+      <button id="reloadUpdateBtn" type="button">Actualizar</button>
+    </section>
+
+    <main id="screen" class="screen" tabindex="-1" aria-live="polite"></main>
+
+    <nav class="bottom-nav" aria-label="Navegación principal">
+      <button class="nav-item is-active" data-view="inicio" type="button" aria-current="page">
+        <span class="nav-glyph" aria-hidden="true">⌂</span>
+        <span>Inicio</span>
+      </button>
+      <button class="nav-item" data-view="nuevo" type="button">
+        <span class="nav-glyph" aria-hidden="true">＋</span>
+        <span>Nuevo</span>
+      </button>
+      <button class="nav-item" data-view="cuaderno" type="button">
+        <span class="nav-glyph" aria-hidden="true">▤</span>
+        <span>Cuaderno</span>
+      </button>
+      <button class="nav-item" data-view="alertas" type="button">
+        <span class="nav-glyph" aria-hidden="true">!</span>
+        <span>Alertas</span>
+      </button>
+      <button class="nav-item" data-view="mas" type="button">
+        <span class="nav-glyph" aria-hidden="true">⋯</span>
+        <span>Más</span>
+      </button>
+    </nav>
+  </div>
+
+  <div id="modalRoot" class="modal-root is-hidden" aria-hidden="true"></div>
+  <div id="toastRoot" class="toast-root" aria-live="polite" aria-atomic="true"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

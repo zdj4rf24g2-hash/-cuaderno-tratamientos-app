@@ -1,0 +1,30 @@
+{
+  "name": "App Cuaderno de Tratamientos",
+  "short_name": "Tratamientos",
+  "description": "PWA local para el cuaderno de tratamientos. Versión limpia e integrada V 2.0.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f4f7fb",
+  "theme_color": "#165d9c",
+  "lang": "es",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "favicon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    },
+    {
+      "src": "maskable-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable any"
+    }
+  ]
+}
