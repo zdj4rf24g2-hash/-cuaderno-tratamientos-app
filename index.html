@@ -1,65 +1,60 @@
 <!doctype html>
 <html lang="es">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#165d9c">
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="default">
-  <meta name="apple-mobile-web-app-title" content="Cuaderno Tratamientos">
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#1f6b45" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="Cuaderno Tratamientos" />
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
   <title>App Cuaderno de Tratamientos · V 2.0</title>
-  <link rel="manifest" href="manifest.webmanifest">
-  <link rel="apple-touch-icon" href="apple-touch-icon.png">
-  <link rel="icon" href="favicon-192.png" sizes="192x192">
-  <link rel="stylesheet" href="styles.css">
+  <link rel="manifest" href="manifest.webmanifest?v=2.0.0" />
+  <link rel="apple-touch-icon" href="apple-touch-icon.png?v=2.0.0" />
+  <link rel="icon" href="icon-192.png?v=2.0.0" />
+  <link rel="stylesheet" href="styles.css?v=2.0.0" />
 </head>
 <body>
-  <div id="appShell" class="app-shell">
+  <div id="app" class="app-shell">
     <header class="topbar">
-      <div class="brand">
-        <p class="brand-kicker">APP CUADERNO DE TRATAMIENTOS</p>
-        <h1>V 2.0</h1>
+      <div class="topbar-inner">
+        <div>
+          <p class="eyebrow">APP CUADERNO DE TRATAMIENTOS · V 2.0</p>
+          <h1>Campaña 2026</h1>
+        </div>
+        <button id="installButton" class="ghost-button install-hidden" type="button" aria-label="Instalar app">Instalar</button>
       </div>
-      <button id="installHintBtn" class="ghost-mini" type="button" aria-label="Información de instalación">Instalar</button>
+      <div class="global-search-wrap">
+        <label class="sr-only" for="globalSearch">Buscar</label>
+        <input id="globalSearch" class="global-search" type="search" placeholder="Buscar tratamientos, productos, incidencias u observaciones" autocomplete="off" />
+      </div>
     </header>
 
-    <section id="updateBanner" class="update-banner is-hidden" role="status" aria-live="polite">
-      <div>
-        <strong>Nueva versión disponible.</strong>
-        <span>Recarga para activar la actualización.</span>
-      </div>
-      <button id="reloadUpdateBtn" type="button">Actualizar</button>
-    </section>
-
-    <main id="screen" class="screen" tabindex="-1" aria-live="polite"></main>
+    <main class="content-area">
+      <section id="view-inicio" class="view active" data-view="inicio"></section>
+      <section id="view-nuevo" class="view" data-view="nuevo"></section>
+      <section id="view-cuaderno" class="view" data-view="cuaderno"></section>
+      <section id="view-alertas" class="view" data-view="alertas"></section>
+      <section id="view-mas" class="view" data-view="mas"></section>
+    </main>
 
     <nav class="bottom-nav" aria-label="Navegación principal">
-      <button class="nav-item is-active" data-view="inicio" type="button" aria-current="page">
-        <span class="nav-glyph" aria-hidden="true">⌂</span>
-        <span>Inicio</span>
-      </button>
-      <button class="nav-item" data-view="nuevo" type="button">
-        <span class="nav-glyph" aria-hidden="true">＋</span>
-        <span>Nuevo</span>
-      </button>
-      <button class="nav-item" data-view="cuaderno" type="button">
-        <span class="nav-glyph" aria-hidden="true">▤</span>
-        <span>Cuaderno</span>
-      </button>
-      <button class="nav-item" data-view="alertas" type="button">
-        <span class="nav-glyph" aria-hidden="true">!</span>
-        <span>Alertas</span>
-      </button>
-      <button class="nav-item" data-view="mas" type="button">
-        <span class="nav-glyph" aria-hidden="true">⋯</span>
-        <span>Más</span>
-      </button>
+      <button type="button" class="nav-button active" data-nav="inicio"><span>⌂</span><small>Inicio</small></button>
+      <button type="button" class="nav-button" data-nav="nuevo"><span>＋</span><small>Nuevo</small></button>
+      <button type="button" class="nav-button" data-nav="cuaderno"><span>▤</span><small>Cuaderno</small></button>
+      <button type="button" class="nav-button" data-nav="alertas"><span>!</span><small>Alertas</small></button>
+      <button type="button" class="nav-button" data-nav="mas"><span>⋯</span><small>Más</small></button>
     </nav>
   </div>
 
-  <div id="modalRoot" class="modal-root is-hidden" aria-hidden="true"></div>
-  <div id="toastRoot" class="toast-root" aria-live="polite" aria-atomic="true"></div>
+  <div id="modalRoot" class="modal-root" aria-live="polite"></div>
+  <div id="toastRoot" class="toast-root" aria-live="polite"></div>
+  <input id="backupImportInput" class="hidden-file-input" type="file" accept="application/json,.json" />
+  <input id="catalogDocInput" class="hidden-file-input" type="file" multiple accept="image/*,application/pdf,.pdf,.png,.jpg,.jpeg,.webp" />
 
-  <script src="app.js"></script>
+  <script src="vendor-loader.js?v=2.0.0"></script>
+  <script src="app.js?v=2.0.0"></script>
 </body>
 </html>

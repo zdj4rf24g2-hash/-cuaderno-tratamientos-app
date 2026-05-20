@@ -1,2911 +1,488 @@
-/* APP CUADERNO DE TRATAMIENTOS · V 2.0
-   Regeneración limpia e integrada.
-   Datos locales en IndexedDB. Sin tratamientos reales incrustados. */
 (() => {
-  "use strict";
+  'use strict';
 
-  const APP_VERSION = "2.0";
-  const APP_LABEL = "APP CUADERNO DE TRATAMIENTOS · V 2.0";
-  const DB_NAME = "cuaderno_tratamientos_v2_0";
-  const DB_VERSION = 1;
-  const STORES = {
-    SETTINGS: "settings",
-    PRODUCTS: "products",
-    TREATMENTS: "treatments",
-    DOCUMENTS: "documents",
-    DRAFTS: "drafts"
+  const VERSION = '2.0.0';
+  const STORAGE_KEY = 'ct_v2_state';
+  const DOC_DB = 'ct_v2_docs';
+  const DOC_STORE = 'docs';
+  const $ = (sel, root=document) => root.querySelector(sel);
+  const $$ = (sel, root=document) => [...root.querySelectorAll(sel)];
+  const refs = {
+    views: {
+      inicio: $('#view-inicio'),
+      nuevo: $('#view-nuevo'),
+      cuaderno: $('#view-cuaderno'),
+      alertas: $('#view-alertas'),
+      mas: $('#view-mas')
+    },
+    nav: $$('.nav-button'),
+    search: $('#globalSearch'),
+    modal: $('#modalRoot'),
+    toast: $('#toastRoot'),
+    install: $('#installButton'),
+    backupInput: $('#backupImportInput'),
+    docsInput: $('#catalogDocInput')
   };
 
-  const TECH_FIELDS = [
-    "regNumber",
-    "activeIngredients",
-    "mezcla",
-    "cropUse",
-    "targets",
-    "doseRecommended",
-    "doseRule",
-    "visibleDoseUnit",
-    "expectedAppliedUnit",
-    "volumeRule",
-    "ps",
-    "maxApplications",
-    "intervalDays",
-    "stageConditions",
-    "source"
-  ];
-
-  const REVIEW_FIELD_LABELS = {
-    regNumber: "N.º de registro",
-    activeIngredients: "Principios activos",
-    mezcla: "MEZCLA",
-    cropUse: "Cultivo / uso",
-    targets: "Plaga / objetivo",
-    doseRecommended: "Dosis recomendada",
-    doseRule: "Regla de dosis",
-    visibleDoseUnit: "Unidad visible",
-    expectedAppliedUnit: "Unidad aplicada esperada",
-    volumeRule: "Volumen caldo",
-    ps: "P.S.",
-    maxApplications: "Máximo de aplicaciones por campaña",
-    intervalDays: "Intervalo entre aplicaciones",
-    stageConditions: "Estadio o condiciones de aplicación",
-    source: "Fuente documental"
+  const ui = {
+    view: 'inicio',
+    search: '',
+    cuadernoMode: 'cards',
+    activeDraftId: null,
+    pendingDocProductId: null,
+    installPrompt: null,
+    tab: 'ficha'
   };
 
-  const state = {
-    db: null,
-    view: "inicio",
-    cuadernoMode: "mobile",
-    settings: null,
-    products: [],
-    treatments: [],
-    documents: [],
-    draft: null,
-    importPreview: null,
-    pendingImportPayload: null,
-    waitingWorker: null,
-    modalStack: []
+  const todayIso = () => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
   };
+  const nowIso = () => new Date().toISOString();
+  const uid = (p='id') => `${p}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2,9)}`;
+  const esc = v => String(v ?? '').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#39;');
+  const norm = v => String(v ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim().toLowerCase();
+  const num = v => v === '' || v === null || v === undefined ? null : (Number.isFinite(Number(String(v).replace(',','.'))) ? Number(String(v).replace(',','.')) : null);
+  const fmtNum = v => num(v) === null ? '—' : new Intl.NumberFormat('es-ES',{maximumFractionDigits:3}).format(num(v));
+  const fmtDate = iso => {
+    const [y,m,d] = String(iso || '').split('-');
+    return y && m && d ? `${d}/${m}/${y}` : '—';
+  };
+  const parseManualDate = raw => {
+    const m = String(raw || '').trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+    if (!m) return null;
+    const dt = new Date(Number(m[3]), Number(m[2])-1, Number(m[1]));
+    if (dt.getFullYear() !== Number(m[3]) || dt.getMonth() !== Number(m[2])-1 || dt.getDate() !== Number(m[1])) return null;
+    return `${m[3]}-${String(m[2]).padStart(2,'0')}-${String(m[1]).padStart(2,'0')}`;
+  };
+  const dateObj = iso => {
+    const [y,m,d] = String(iso || '').split('-').map(Number);
+    if (!y || !m || !d) return null;
+    const dt = new Date(y,m-1,d);
+    return dt.getFullYear() === y && dt.getMonth() === m-1 && dt.getDate() === d ? dt : null;
+  };
+  const isFuture = iso => {
+    const a = dateObj(iso);
+    const b = dateObj(todayIso());
+    return Boolean(a && b && a.getTime() > b.getTime());
+  };
+  const units = ['g/hL','kg/hL','mL/hL','L/hL','g/ha','kg/ha','mL/ha','L/ha'];
 
-  const screen = document.getElementById("screen");
-  const nav = Array.from(document.querySelectorAll(".nav-item"));
-  const modalRoot = document.getElementById("modalRoot");
-  const toastRoot = document.getElementById("toastRoot");
-  const updateBanner = document.getElementById("updateBanner");
-  const reloadUpdateBtn = document.getElementById("reloadUpdateBtn");
-  const installHintBtn = document.getElementById("installHintBtn");
-
-  // ---------- Inicio ----------
-  init().catch((error) => {
-    console.error(error);
-    screen.innerHTML = `
-      <section class="card">
-        <h2>Error de arranque</h2>
-        <p>No se ha podido iniciar la app local. Recarga la página.</p>
-        <p class="small muted">${escapeHtml(error?.message || String(error))}</p>
-      </section>
-    `;
+  const blankUse = () => ({
+    id: uid('uso'),
+    crop: 'Vid de vinificación',
+    target: '',
+    ps: 'A verificar',
+    doseDisplay: 'A verificar',
+    doseRule: { kind:'unset', unit:'', value:null, min:null, max:null, limitHa:null },
+    volumeDisplay: 'A verificar',
+    volumeRule: { kind:'unset', value:null, min:null, max:null },
+    maxApplications: null,
+    interval: '',
+    stadium: '',
+    extra: ''
   });
 
-  async function init() {
-    state.db = await openDb();
-    await ensureSettings();
-    await refreshAll();
-    bindGlobalEvents();
-    bindServiceWorker();
-    render();
-  }
+  const blankState = () => ({
+    schema: 'CT-APP-V2',
+    version: VERSION,
+    campaign: '2026',
+    createdAt: nowIso(),
+    updatedAt: nowIso(),
+    settings: {
+      campaignName: 'Campaña 2026',
+      applicator: 'JOSE FELIX BUA VILA',
+      defaultCrop: 'Vid de vinificación',
+      defaultLha: 400
+    },
+    products: [],
+    interventions: [],
+    drafts: [],
+    resolvedAlerts: [],
+    importHistory: []
+  });
 
-  async function ensureSettings() {
-    const existing = await dbGet(STORES.SETTINGS, "main");
-    if (existing) {
-      state.settings = existing;
-      return;
-    }
-    const settings = {
-      id: "main",
-      campaign: "2026",
-      applicator: "",
-      createdAt: nowIso(),
-      updatedAt: nowIso()
-    };
-    await dbPut(STORES.SETTINGS, settings);
-    state.settings = settings;
-  }
-
-  async function refreshAll() {
-    state.settings = await dbGet(STORES.SETTINGS, "main") || state.settings;
-    state.products = sortByName(await dbGetAll(STORES.PRODUCTS), "name");
-    state.treatments = sortTreatments(await dbGetAll(STORES.TREATMENTS));
-    state.documents = sortDocs(await dbGetAll(STORES.DOCUMENTS));
-    state.draft = await dbGet(STORES.DRAFTS, "current");
-  }
-
-  function bindGlobalEvents() {
-    nav.forEach((button) => {
-      button.addEventListener("click", () => navigate(button.dataset.view));
-    });
-
-    screen.addEventListener("click", onScreenClick);
-    screen.addEventListener("input", onScreenInput);
-    screen.addEventListener("change", onScreenChange);
-    modalRoot.addEventListener("click", onModalClick);
-    modalRoot.addEventListener("change", onModalChange);
-    modalRoot.addEventListener("input", onModalInput);
-
-    reloadUpdateBtn.addEventListener("click", () => {
-      if (state.waitingWorker) {
-        state.waitingWorker.postMessage({ type: "SKIP_WAITING" });
-      } else {
-        window.location.reload();
-      }
-    });
-
-    installHintBtn.addEventListener("click", () => {
-      openModal(`
-        <div class="modal">
-          <div class="modal-header">
-            <h3>Instalación en iPhone</h3>
-            <button class="modal-close" data-action="close-modal" type="button" aria-label="Cerrar">×</button>
-          </div>
-          <div class="modal-body stack">
-            <p>Abre la app en Safari, pulsa <strong>Compartir</strong> y elige <strong>Añadir a pantalla de inicio</strong>.</p>
-            <div class="callout">
-              <strong>Versión visible:</strong> ${APP_LABEL}
-            </div>
-          </div>
-        </div>
-      `);
-    });
-  }
-
-  function navigate(view) {
-    state.view = view;
-    nav.forEach((button) => {
-      const active = button.dataset.view === view;
-      button.classList.toggle("is-active", active);
-      if (active) {
-        button.setAttribute("aria-current", "page");
-      } else {
-        button.removeAttribute("aria-current");
-      }
-    });
-    render();
-    screen.focus({ preventScroll: true });
-    window.scrollTo({ top: 0, behavior: "smooth" });
-  }
-
-  function render() {
-    switch (state.view) {
-      case "inicio":
-        screen.innerHTML = renderInicio();
-        break;
-      case "nuevo":
-        screen.innerHTML = renderNuevo();
-        break;
-      case "cuaderno":
-        screen.innerHTML = renderCuaderno();
-        break;
-      case "alertas":
-        screen.innerHTML = renderAlertas();
-        break;
-      case "mas":
-        screen.innerHTML = renderMas();
-        break;
-      default:
-        state.view = "inicio";
-        screen.innerHTML = renderInicio();
-    }
-  }
-
-  // ---------- Pantallas ----------
-  function renderInicio() {
-    const alerts = buildAlerts();
-    const last = state.treatments[0] || null;
-    const draftInfo = state.draft ? draftSummary(state.draft) : null;
-    const datesCount = new Set(state.treatments.map((row) => row.date)).size;
-    const applications = state.treatments.length;
-
-    return `
-      <section class="screen-header">
-        <h2>Inicio</h2>
-        <p>Campaña ${escapeHtml(state.settings?.campaign || "2026")} · Datos locales en este dispositivo.</p>
-      </section>
-
-      <section class="stack">
-        <article class="card">
-          <h3>Resumen de campaña</h3>
-          <div class="metric-grid">
-            <div class="metric"><span class="label">Fechas registradas</span><span class="value">${datesCount}</span></div>
-            <div class="metric"><span class="label">Aplicaciones</span><span class="value">${applications}</span></div>
-            <div class="metric"><span class="label">Productos</span><span class="value">${state.products.length}</span></div>
-            <div class="metric"><span class="label">Alertas</span><span class="value">${alerts.length}</span></div>
-          </div>
-        </article>
-
-        <article class="card">
-          <h3>Accesos rápidos</h3>
-          <div class="btn-row">
-            <button class="btn" type="button" data-route="nuevo">Nuevo tratamiento</button>
-            <button class="btn-soft" type="button" data-route="cuaderno">Abrir cuaderno</button>
-            <button class="btn-ghost" type="button" data-route="alertas">Ver alertas</button>
-          </div>
-        </article>
-
-        <div class="grid-2">
-          <article class="card">
-            <h3>Borrador</h3>
-            ${draftInfo ? `
-              <p><strong>${draftInfo.dates}</strong> fecha(s) en sesión · <strong>${draftInfo.apps}</strong> producto(s).</p>
-              <p class="muted small">Última actualización: ${formatDateTime(state.draft.updatedAt)}</p>
-              <div class="btn-row">
-                <button class="btn-soft" type="button" data-route="nuevo">Continuar</button>
-                <button class="btn-danger" type="button" data-action="discard-draft">Eliminar</button>
-              </div>
-            ` : `
-              <div class="empty">No hay borrador activo.</div>
-            `}
-          </article>
-
-          <article class="card">
-            <h3>Último tratamiento</h3>
-            ${last ? renderLastTreatmentCard(last) : `
-              <div class="empty">No hay tratamientos cargados todavía.</div>
-            `}
-          </article>
-        </div>
-
-        <article class="card">
-          <div class="item-head">
-            <h3>Alertas prioritarias</h3>
-            <button class="linklike" type="button" data-route="alertas">Ver todas</button>
-          </div>
-          ${alerts.length ? `
-            <ul class="alert-list">
-              ${alerts.slice(0, 3).map(renderAlertCompact).join("")}
-            </ul>
-          ` : `
-            <div class="empty">Sin alertas activas.</div>
-          `}
-        </article>
-      </section>
-    `;
-  }
-
-  function renderNuevo() {
-    const draft = ensureDraftInMemory();
-    const totalApps = draft.dates.reduce((sum, group) => sum + group.applications.length, 0);
-    return `
-      <section class="screen-header">
-        <h2>Nuevo tratamiento</h2>
-        <p>Flujo guiado con varias fechas y varios productos por fecha. Guarda solo al pulsar <strong>FIN y registrar</strong>.</p>
-      </section>
-
-      <section class="stack">
-        <article class="card compact">
-          <div class="item-head">
-            <div>
-              <strong>Aplicador activo</strong>
-              <p class="muted small">${escapeHtml(state.settings?.applicator || "No configurado")}</p>
-            </div>
-            <button class="btn-ghost" type="button" data-route="mas">Cambiar</button>
-          </div>
-        </article>
-
-        <article class="card">
-          <div class="item-head">
-            <div>
-              <h3>Sesión en curso</h3>
-              <p class="muted small">${draft.dates.length} fecha(s) · ${totalApps} producto(s)</p>
-            </div>
-            <div class="item-actions">
-              <button class="btn-soft" type="button" data-action="add-draft-date">Añadir fecha</button>
-              <button class="btn-ghost" type="button" data-action="save-draft">Guardar borrador</button>
-            </div>
-          </div>
-          <hr class="hr">
-          <div class="stack">
-            ${draft.dates.map(renderDraftDateGroup).join("")}
-          </div>
-          <hr class="hr">
-          <div class="btn-row">
-            <button class="btn" type="button" data-action="finish-draft">FIN y registrar</button>
-            <button class="btn-danger" type="button" data-action="discard-draft">Eliminar borrador</button>
-          </div>
-        </article>
-      </section>
-    `;
-  }
-
-  function renderCuaderno() {
-    const hasRows = state.treatments.length > 0;
-    return `
-      <section class="screen-header">
-        <h2>Cuaderno</h2>
-        <p>Vista móvil y vista tipo PDF con la tabla completa de 15 columnas.</p>
-      </section>
-
-      <section class="stack">
-        <article class="card">
-          <div class="table-tools">
-            <div class="segmented" role="tablist" aria-label="Modo de visualización">
-              <button class="${state.cuadernoMode === "mobile" ? "is-active" : ""}" type="button" data-action="cuaderno-mode" data-mode="mobile">Vista móvil</button>
-              <button class="${state.cuadernoMode === "pdf" ? "is-active" : ""}" type="button" data-action="cuaderno-mode" data-mode="pdf">Vista tipo PDF</button>
-            </div>
-          </div>
-
-          <div class="table-tools">
-            <button class="btn-soft" type="button" data-action="export-pdf-official">PDF oficial</button>
-            <button class="btn-soft" type="button" data-action="export-pdf-compact">PDF compacto</button>
-            <button class="btn-ghost" type="button" data-action="export-csv">CSV</button>
-            <button class="btn-ghost" type="button" data-action="export-xls">Excel</button>
-          </div>
-
-          ${hasRows ? (state.cuadernoMode === "mobile" ? renderMobileRecords() : renderPdfTable()) : `
-            <div class="empty">La app está limpia. Los tratamientos reales se importarán solo cuando la V 2.0 quede validada.</div>
-          `}
-        </article>
-      </section>
-    `;
-  }
-
-  function renderAlertas() {
-    const alerts = buildAlerts();
-    return `
-      <section class="screen-header">
-        <h2>Alertas</h2>
-        <p>Pendientes técnicos, incidencias, máximos y revisiones documentales.</p>
-      </section>
-
-      <section class="card">
-        ${alerts.length ? `
-          <ul class="alert-list">
-            ${alerts.map(renderAlertFull).join("")}
-          </ul>
-        ` : `
-          <div class="empty">Sin alertas activas.</div>
-        `}
-      </section>
-    `;
-  }
-
-  function renderMas() {
-    return `
-      <section class="screen-header">
-        <h2>Más</h2>
-        <p>Configuración, catálogo de productos, documentación, copia e importación.</p>
-      </section>
-
-      <section class="stack">
-        <article class="card">
-          <h3>Configuración de campaña</h3>
-          <div class="form-grid cols-2">
-            <div class="field">
-              <label for="settingsCampaign">Campaña</label>
-              <input id="settingsCampaign" data-setting="campaign" type="text" value="${escapeAttr(state.settings?.campaign || "2026")}" inputmode="numeric">
-            </div>
-            <div class="field">
-              <label for="settingsApplicator">Aplicador</label>
-              <input id="settingsApplicator" data-setting="applicator" type="text" value="${escapeAttr(state.settings?.applicator || "")}" placeholder="Nombre del aplicador">
-            </div>
-          </div>
-          <div class="btn-row" style="margin-top:12px">
-            <button class="btn" type="button" data-action="save-settings">Guardar configuración</button>
-          </div>
-        </article>
-
-        <article class="card">
-          <div class="item-head">
-            <div>
-              <h3>Catálogo de productos</h3>
-              <p class="muted small">${state.products.length} ficha(s) disponibles.</p>
-            </div>
-            <button class="btn" type="button" data-action="new-product">Añadir producto</button>
-          </div>
-          <hr class="hr">
-          ${state.products.length ? `
-            <ul class="product-list">
-              ${state.products.map(renderProductListItem).join("")}
-            </ul>
-          ` : `
-            <div class="empty">Catálogo vacío. Añade productos manualmente o impórtalos más adelante.</div>
-          `}
-        </article>
-
-        <article class="card">
-          <h3>Copia completa, restauración e importación controlada</h3>
-          <p class="muted small">La carga real de tratamientos se hará más adelante, cuando esta V 2.0 quede operativa y validada.</p>
-          <div class="btn-row">
-            <button class="btn-soft" type="button" data-action="export-backup">Exportar copia completa</button>
-            <label class="btn-ghost" for="importJsonInput" style="display:inline-flex;align-items:center;">Seleccionar JSON</label>
-            <input id="importJsonInput" data-action="pick-import-json" type="file" accept="application/json,.json" class="is-hidden">
-          </div>
-          <div id="importPreviewHost" style="margin-top:12px">
-            ${state.importPreview ? renderImportPreview(state.importPreview) : ""}
-          </div>
-        </article>
-
-        <article class="card">
-          <h3>Estado técnico de la PWA</h3>
-          <div class="detail-grid">
-            <div class="detail">
-              <span class="key">Versión visible</span>
-              <span class="val">${APP_LABEL}</span>
-            </div>
-            <div class="detail">
-              <span class="key">Actualización</span>
-              <span class="val">Caché versionada y aviso de nueva versión preparado.</span>
-            </div>
-            <div class="detail">
-              <span class="key">Privacidad</span>
-              <span class="val">Datos locales en el dispositivo. La app se entrega sin tratamientos reales incrustados.</span>
-            </div>
-          </div>
-        </article>
-      </section>
-    `;
-  }
-
-  // ---------- Render auxiliares ----------
-  function renderLastTreatmentCard(row) {
-    const sameDate = state.treatments.filter((item) => item.date === row.date);
-    const names = sameDate.map((item) => item.productName || "Producto").join(", ");
-    return `
-      <p><strong>${formatDate(row.date)}</strong></p>
-      <p>${escapeHtml(names)}</p>
-      <button class="btn-soft" type="button" data-route="cuaderno">Abrir cuaderno</button>
-    `;
-  }
-
-  function renderAlertCompact(alert) {
-    return `
-      <li class="alert-item ${alert.level === "critical" ? "is-critical" : ""}">
-        <div class="item-head">
-          <div>
-            <strong>${escapeHtml(alert.title)}</strong>
-            <p class="muted small">${escapeHtml(alert.detail)}</p>
-          </div>
-          ${renderAlertAction(alert)}
-        </div>
-      </li>
-    `;
-  }
-
-  function renderAlertFull(alert) {
-    return `
-      <li class="alert-item ${alert.level === "critical" ? "is-critical" : ""}">
-        <div class="item-head">
-          <div>
-            <span class="badge ${alert.level === "critical" ? "badge-red" : "badge-yellow"}">${alert.level === "critical" ? "Incidencia" : "Pendiente"}</span>
-            <h3 style="margin:8px 0 4px">${escapeHtml(alert.title)}</h3>
-            <p class="muted">${escapeHtml(alert.detail)}</p>
-          </div>
-          ${renderAlertAction(alert)}
-        </div>
-      </li>
-    `;
-  }
-
-  function renderAlertAction(alert) {
-    if (alert.productId) {
-      return `<button class="btn-soft" type="button" data-action="edit-product" data-product-id="${escapeAttr(alert.productId)}">Editar ficha</button>`;
-    }
-    if (alert.route) {
-      return `<button class="btn-soft" type="button" data-route="${escapeAttr(alert.route)}">Abrir</button>`;
-    }
-    return "";
-  }
-
-  function renderDraftDateGroup(group, index) {
-    const future = isFutureDate(group.date);
-    const soloIssue = draftDateHasSoloMixIssue(group);
-    return `
-      <section class="session-date" data-date-id="${escapeAttr(group.id)}">
-        <div class="session-date-head">
-          <div>
-            <strong>Fecha ${index + 1}</strong>
-            <p class="muted small">${group.applications.length} producto(s)</p>
-          </div>
-          <div class="item-actions">
-            <button class="btn-soft" type="button" data-action="add-draft-application" data-date-id="${escapeAttr(group.id)}">Añadir producto</button>
-            ${state.draft?.dates?.length > 1 ? `<button class="btn-danger" type="button" data-action="remove-draft-date" data-date-id="${escapeAttr(group.id)}">Eliminar fecha</button>` : ""}
-          </div>
-        </div>
-
-        <div class="form-grid cols-2">
-          <div class="field">
-            <label>Fecha de aplicación</label>
-            <input type="date" data-draft-date-field="date" data-date-id="${escapeAttr(group.id)}" value="${escapeAttr(group.date || todayIso())}">
-          </div>
-          <div class="field">
-            <span class="label">Confirmación de fecha futura</span>
-            ${future ? `
-              <label class="inline-check">
-                <input class="check-blue" type="checkbox" data-draft-date-field="futureConfirmed" data-date-id="${escapeAttr(group.id)}" ${group.futureConfirmed ? "checked" : ""}>
-                <span>Confirmo que deseo registrar una fecha futura.</span>
-              </label>
-              <span class="notice-inline">La app bloquea fechas futuras salvo doble confirmación al guardar.</span>
-            ` : `
-              <span class="notice-inline">No procede.</span>
-            `}
-          </div>
-        </div>
-
-        ${soloIssue ? `
-          <div class="callout warnbox">
-            <strong>Producto marcado SOLO detectado.</strong>
-            <p class="small">Para registrar esta fecha junto con otros productos, confirma que se aplicaron en cubas distintas.</p>
-            <label class="inline-check">
-              <input class="check-blue" type="checkbox" data-draft-date-field="soloSeparateConfirmed" data-date-id="${escapeAttr(group.id)}" ${group.soloSeparateConfirmed ? "checked" : ""}>
-              <span>Confirmo cubas distintas.</span>
-            </label>
-          </div>
-        ` : ""}
-
-        <div class="stack">
-          ${group.applications.length ? group.applications.map((app, appIndex) => renderDraftApplication(group, app, appIndex)).join("") : `
-            <div class="empty">Aún no hay productos en esta fecha.</div>
-          `}
-        </div>
-      </section>
-    `;
-  }
-
-  function renderDraftApplication(group, app, index) {
-    const validation = validateDraftApplication(group, app);
-    const product = productById(app.productId);
-    const targets = getProductTargets(product);
-    return `
-      <article class="application-card ${validation.errors.length ? "is-invalid" : ""}" data-app-id="${escapeAttr(app.id)}" data-date-id="${escapeAttr(group.id)}">
-        <div class="item-head">
-          <div>
-            <strong>Producto ${index + 1}</strong>
-            ${product ? `<p class="muted small">${escapeHtml(product.name)}</p>` : `<p class="muted small">Selecciona una ficha del catálogo.</p>`}
-          </div>
-          <button class="btn-danger" type="button" data-action="remove-draft-application" data-date-id="${escapeAttr(group.id)}" data-app-id="${escapeAttr(app.id)}">Quitar</button>
-        </div>
-
-        <div class="form-grid cols-2">
-          <div class="field">
-            <label>Producto</label>
-            <select data-draft-app-field="productId" data-date-id="${escapeAttr(group.id)}" data-app-id="${escapeAttr(app.id)}">
-              <option value="">Seleccionar</option>
-              ${state.products.map((item) => `<option value="${escapeAttr(item.id)}" ${item.id === app.productId ? "selected" : ""}>${escapeHtml(item.name)}</option>`).join("")}
-            </select>
-          </div>
-          <div class="field">
-            <label>Lote</label>
-            <input type="text" data-draft-app-field="lot" data-date-id="${escapeAttr(group.id)}" data-app-id="${escapeAttr(app.id)}" value="${escapeAttr(app.lot || "")}" placeholder="Lote real aplicado">
-          </div>
-          <div class="field">
-            <label>Dosis aplicada</label>
-            <input type="text" inputmode="decimal" data-draft-app-field="appliedDose" data-date-id="${escapeAttr(group.id)}" data-app-id="${escapeAttr(app.id)}" value="${escapeAttr(app.appliedDose || "")}" placeholder="Valor">
-          </div>
-          <div class="field">
-            <label>Unidad aplicada</label>
-            <input type="text" data-draft-app-field="appliedUnit" data-date-id="${escapeAttr(group.id)}" data-app-id="${escapeAttr(app.id)}" value="${escapeAttr(app.appliedUnit || product?.expectedAppliedUnit || "")}" placeholder="kg/ha, cc/hL...">
-          </div>
-          <div class="field">
-            <label>Litros/ha aplicados</label>
-            <input type="text" inputmode="decimal" data-draft-app-field="litersHa" data-date-id="${escapeAttr(group.id)}" data-app-id="${escapeAttr(app.id)}" value="${escapeAttr(app.litersHa || "")}" placeholder="L/ha">
-          </div>
-          <div class="field">
-            <label>Plaga / objetivo</label>
-            ${targets.length ? `
-              <select data-draft-app-field="target" data-date-id="${escapeAttr(group.id)}" data-app-id="${escapeAttr(app.id)}">
-                <option value="">Seleccionar</option>
-                ${targets.map((target) => `<option value="${escapeAttr(target)}" ${target === app.target ? "selected" : ""}>${escapeHtml(target)}</option>`).join("")}
-              </select>
-            ` : `
-              <input type="text" data-draft-app-field="target" data-date-id="${escapeAttr(group.id)}" data-app-id="${escapeAttr(app.id)}" value="${escapeAttr(app.target || "")}" placeholder="Objetivo">
-            `}
-          </div>
-        </div>
-
-        ${product ? `
-          <div class="summary-strip">
-            <span class="badge badge-blue">Cultivo: ${escapeHtml(product.cropUse || "A verificar")}</span>
-            <span class="badge ${product.mezcla === "SOLO" ? "badge-red" : "badge-green"}">MEZCLA: ${escapeHtml(product.mezcla || "A verificar")}</span>
-            <span class="badge badge-yellow">Volumen: ${escapeHtml(formatVolumeRule(product.volumeRule))}</span>
-          </div>
-        ` : ""}
-
-        ${validation.errors.length || validation.warnings.length ? `
-          <div class="callout ${validation.errors.length ? "warnbox" : "yellowbox"}">
-            ${validation.errors.length ? `<strong>Bloqueos</strong><ul>${validation.errors.map((e) => `<li>${escapeHtml(e)}</li>`).join("")}</ul>` : ""}
-            ${validation.warnings.length ? `<strong>Avisos</strong><ul>${validation.warnings.map((e) => `<li>${escapeHtml(e)}</li>`).join("")}</ul>` : ""}
-          </div>
-        ` : `
-          <div class="callout"><strong>Validación inicial correcta.</strong></div>
-        `}
-      </article>
-    `;
-  }
-
-  function renderMobileRecords() {
-    return `
-      <div class="mobile-table-cards">
-        ${state.treatments.map((row) => {
-          const display = displayTreatmentRow(row);
-          const pending = rowHasPending(display);
-          return `
-            <article class="record-card ${pending ? "pending" : ""}">
-              <div class="record-top">
-                <div>
-                  <h4>${escapeHtml(display.productName)}</h4>
-                  <span class="record-date">${escapeHtml(display.dateFormatted)}</span>
-                </div>
-                <span class="badge ${pending ? "badge-red" : "badge-green"}">${pending ? "A verificar" : "Registrado"}</span>
-              </div>
-              <div class="detail-grid">
-                <div class="detail"><span class="key">N.º</span><span class="val">${escapeHtml(display.groupNo)}</span></div>
-                <div class="detail"><span class="key">N.º registro</span><span class="val">${escapeHtml(display.regNumber)}</span></div>
-                <div class="detail"><span class="key">Lote</span><span class="val">${escapeHtml(display.lot)}</span></div>
-                <div class="detail"><span class="key">Dosis recomendada</span><span class="val">${escapeHtml(display.doseRecommended)}</span></div>
-                <div class="detail"><span class="key">Dosis aplicada</span><span class="val">${escapeHtml(display.appliedDose)}</span></div>
-                <div class="detail"><span class="key">Volumen caldo</span><span class="val">${escapeHtml(display.volumeRule)}</span></div>
-                <div class="detail"><span class="key">L/ha aplicados</span><span class="val">${escapeHtml(display.litersHa)}</span></div>
-                <div class="detail"><span class="key">Cultivo</span><span class="val">${escapeHtml(display.cropUse)}</span></div>
-                <div class="detail"><span class="key">Plaga / patógeno</span><span class="val">${escapeHtml(display.target)}</span></div>
-                <div class="detail"><span class="key">P.S.</span><span class="val">${escapeHtml(display.ps)}</span></div>
-                <div class="detail"><span class="key">Tratamientos campaña</span><span class="val">${escapeHtml(display.campaignCount)}</span></div>
-                <div class="detail"><span class="key">Principios activos</span><span class="val">${escapeHtml(display.activeIngredients)}</span></div>
-                <div class="detail"><span class="key">MEZCLA</span><span class="val">${escapeHtml(display.mezcla)}</span></div>
-              </div>
-            </article>
-          `;
-        }).join("")}
-      </div>
-    `;
-  }
-
-  function renderPdfTable() {
-    return `
-      <div class="pdf-table-wrap">
-        ${buildTableHtml()}
-      </div>
-    `;
-  }
-
-  function renderProductListItem(product) {
-    const pending = Array.isArray(product.pendingFields) && product.pendingFields.length > 0;
-    const docs = state.documents.filter((doc) => doc.productId === product.id).length;
-    return `
-      <li class="product-item">
-        <div class="item-head">
-          <div>
-            <strong>${escapeHtml(product.name || "Producto sin nombre")}</strong>
-            <p class="muted small">Registro: ${escapeHtml(product.regNumber || "A verificar")} · Documentos: ${docs}</p>
-            <div class="summary-strip">
-              <span class="badge ${pending ? "badge-red" : "badge-green"}">${pending ? "Pendiente técnico" : "Ficha revisada"}</span>
-              <span class="badge badge-blue">MEZCLA: ${escapeHtml(product.mezcla || "A verificar")}</span>
-            </div>
-          </div>
-          <div class="item-actions">
-            <button class="btn-soft" type="button" data-action="edit-product" data-product-id="${escapeAttr(product.id)}">Editar ficha</button>
-            <button class="btn-danger" type="button" data-action="delete-product" data-product-id="${escapeAttr(product.id)}">Eliminar</button>
-          </div>
-        </div>
-      </li>
-    `;
-  }
-
-  function renderImportPreview(preview) {
-    return `
-      <div class="callout yellowbox">
-        <strong>JSON preparado para importación controlada</strong>
-        <p class="small">Tipo detectado: ${escapeHtml(preview.typeLabel)}</p>
-        <div class="summary-strip">
-          <span class="badge badge-blue">Productos: ${preview.products}</span>
-          <span class="badge badge-blue">Tratamientos: ${preview.treatments}</span>
-          <span class="badge badge-blue">Documentos: ${preview.documents}</span>
-        </div>
-        <div class="btn-row" style="margin-top:10px">
-          <button class="btn" type="button" data-action="confirm-import">Confirmar importación</button>
-          <button class="btn-ghost" type="button" data-action="cancel-import">Cancelar</button>
-        </div>
-      </div>
-    `;
-  }
-
-  // ---------- Alertas ----------
-  function buildAlerts() {
-    const alerts = [];
-
-    for (const product of state.products) {
-      if (Array.isArray(product.pendingFields) && product.pendingFields.length) {
-        alerts.push({
-          id: `prod-${product.id}`,
-          level: "pending",
-          title: `${product.name || "Producto"} pendiente de revisión`,
-          detail: `Campos A verificar: ${product.pendingFields.map((field) => REVIEW_FIELD_LABELS[field] || field).join(", ")}.`,
-          productId: product.id
-        });
-      }
-    }
-
-    for (const row of state.treatments) {
-      const display = displayTreatmentRow(row);
-      if (rowHasPending(display)) {
-        alerts.push({
-          id: `row-${row.id}`,
-          level: "pending",
-          title: `Aplicación de ${display.productName} con datos A verificar`,
-          detail: `${display.dateFormatted} · revisar ficha técnica o registro importado.`,
-          productId: row.productId || null,
-          route: "cuaderno"
-        });
-      }
-    }
-
-    const counts = countTreatmentsByProduct();
-    for (const product of state.products) {
-      const max = parseMaxApplications(product.maxApplications);
-      if (max !== null && (counts.get(product.id) || 0) > max) {
-        alerts.push({
-          id: `max-${product.id}`,
-          level: "critical",
-          title: `Máximo superado: ${product.name}`,
-          detail: `${counts.get(product.id)} aplicación(es) registradas frente a un máximo de ${max}.`,
-          productId: product.id
-        });
-      }
-    }
-
-    return dedupeAlerts(alerts);
-  }
-
-  function dedupeAlerts(alerts) {
-    const seen = new Set();
-    return alerts.filter((alert) => {
-      const key = `${alert.title}|${alert.detail}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-  }
-
-  // ---------- Eventos de pantalla ----------
-  async function onScreenClick(event) {
-    const routeBtn = event.target.closest("[data-route]");
-    if (routeBtn) {
-      navigate(routeBtn.dataset.route);
-      return;
-    }
-
-    const actionBtn = event.target.closest("[data-action]");
-    if (!actionBtn) return;
-    const action = actionBtn.dataset.action;
-
-    switch (action) {
-      case "discard-draft":
-        await discardDraft();
-        break;
-      case "save-draft":
-        await persistDraft("Borrador guardado.");
-        break;
-      case "add-draft-date":
-        addDraftDate();
-        break;
-      case "remove-draft-date":
-        removeDraftDate(actionBtn.dataset.dateId);
-        break;
-      case "add-draft-application":
-        addDraftApplication(actionBtn.dataset.dateId);
-        break;
-      case "remove-draft-application":
-        removeDraftApplication(actionBtn.dataset.dateId, actionBtn.dataset.appId);
-        break;
-      case "finish-draft":
-        await finishDraft();
-        break;
-      case "cuaderno-mode":
-        state.cuadernoMode = actionBtn.dataset.mode || "mobile";
-        render();
-        break;
-      case "export-csv":
-        exportCsv();
-        break;
-      case "export-xls":
-        exportXls();
-        break;
-      case "export-pdf-official":
-        printOfficialPdf();
-        break;
-      case "export-pdf-compact":
-        printCompactPdf();
-        break;
-      case "save-settings":
-        await saveSettingsFromScreen();
-        break;
-      case "new-product":
-        openProductModal(null);
-        break;
-      case "edit-product":
-        openProductModal(actionBtn.dataset.productId);
-        break;
-      case "delete-product":
-        await deleteProduct(actionBtn.dataset.productId);
-        break;
-      case "export-backup":
-        await exportBackup();
-        break;
-      case "confirm-import":
-        await confirmPendingImport();
-        break;
-      case "cancel-import":
-        clearPendingImport();
-        break;
-      default:
-        break;
-    }
-  }
-
-  async function onScreenInput(event) {
-    const dateField = event.target.closest("[data-draft-date-field]");
-    if (dateField) {
-      updateDraftDateField(dateField);
-      return;
-    }
-    const appField = event.target.closest("[data-draft-app-field]");
-    if (appField) {
-      updateDraftAppField(appField);
-      return;
-    }
-  }
-
-  async function onScreenChange(event) {
-    const dateField = event.target.closest("[data-draft-date-field]");
-    if (dateField) {
-      updateDraftDateField(dateField);
-      await persistDraftSilently();
-      return;
-    }
-
-    const appField = event.target.closest("[data-draft-app-field]");
-    if (appField) {
-      updateDraftAppField(appField);
-      await persistDraftSilently();
-      return;
-    }
-
-    const importInput = event.target.closest("#importJsonInput");
-    if (importInput && importInput.files?.length) {
-      await previewImportFile(importInput.files[0]);
-      importInput.value = "";
-      return;
-    }
-  }
-
-  // ---------- Borrador / Nuevo tratamiento ----------
-  function ensureDraftInMemory() {
-    if (state.draft) return normalizeDraft(state.draft);
-    state.draft = {
-      id: "current",
-      dates: [blankDraftDate()],
-      createdAt: nowIso(),
-      updatedAt: nowIso()
-    };
-    return state.draft;
-  }
-
-  function normalizeDraft(draft) {
-    draft.dates = Array.isArray(draft.dates) && draft.dates.length ? draft.dates : [blankDraftDate()];
-    draft.dates = draft.dates.map((group) => ({
-      id: group.id || uid("date"),
-      date: group.date || todayIso(),
-      futureConfirmed: !!group.futureConfirmed,
-      futureDoubleConfirmed: !!group.futureDoubleConfirmed,
-      soloSeparateConfirmed: !!group.soloSeparateConfirmed,
-      applications: Array.isArray(group.applications) ? group.applications.map(normalizeDraftApplication) : []
-    }));
-    return draft;
-  }
-
-  function normalizeDraftApplication(app) {
-    return {
-      id: app.id || uid("app"),
-      productId: app.productId || "",
-      lot: app.lot || "",
-      appliedDose: app.appliedDose || "",
-      appliedUnit: app.appliedUnit || "",
-      litersHa: app.litersHa || "",
-      target: app.target || ""
+  function normalizeUse(u={}) {
+    return { ...blankUse(), ...u,
+      id: u.id || uid('uso'),
+      doseRule: { kind:'unset', unit:'', value:null, min:null, max:null, limitHa:null, ...(u.doseRule || {}) },
+      volumeRule: { kind:'unset', value:null, min:null, max:null, ...(u.volumeRule || {}) }
     };
   }
-
-  function blankDraftDate() {
-    return {
-      id: uid("date"),
-      date: todayIso(),
-      futureConfirmed: false,
-      futureDoubleConfirmed: false,
-      soloSeparateConfirmed: false,
-      applications: []
-    };
-  }
-
-  function blankDraftApplication() {
-    return {
-      id: uid("app"),
-      productId: "",
-      lot: "",
-      appliedDose: "",
-      appliedUnit: "",
-      litersHa: "",
-      target: ""
-    };
-  }
-
-  function draftSummary(draft) {
-    const dates = draft?.dates?.length || 0;
-    const apps = draft?.dates?.reduce((sum, group) => sum + (group.applications?.length || 0), 0) || 0;
-    return { dates, apps };
-  }
-
-  async function persistDraft(message = "") {
-    if (!state.draft) return;
-    state.draft.updatedAt = nowIso();
-    await dbPut(STORES.DRAFTS, state.draft);
-    if (message) toast(message);
-    render();
-  }
-
-  async function persistDraftSilently() {
-    if (!state.draft) return;
-    state.draft.updatedAt = nowIso();
-    await dbPut(STORES.DRAFTS, state.draft);
-  }
-
-  async function discardDraft() {
-    await dbDelete(STORES.DRAFTS, "current");
-    state.draft = null;
-    toast("Borrador eliminado.");
-    render();
-  }
-
-  function addDraftDate() {
-    const draft = ensureDraftInMemory();
-    draft.dates.push(blankDraftDate());
-    persistDraftSilently();
-    render();
-  }
-
-  function removeDraftDate(dateId) {
-    const draft = ensureDraftInMemory();
-    if (draft.dates.length <= 1) return;
-    draft.dates = draft.dates.filter((group) => group.id !== dateId);
-    persistDraftSilently();
-    render();
-  }
-
-  function addDraftApplication(dateId) {
-    const group = ensureDraftInMemory().dates.find((item) => item.id === dateId);
-    if (!group) return;
-    if (!state.products.length) {
-      toast("Antes debes crear una ficha de producto en Más.");
-      navigate("mas");
-      return;
-    }
-    group.applications.push(blankDraftApplication());
-    persistDraftSilently();
-    render();
-  }
-
-  function removeDraftApplication(dateId, appId) {
-    const group = ensureDraftInMemory().dates.find((item) => item.id === dateId);
-    if (!group) return;
-    group.applications = group.applications.filter((app) => app.id !== appId);
-    persistDraftSilently();
-    render();
-  }
-
-  function updateDraftDateField(input) {
-    const group = ensureDraftInMemory().dates.find((item) => item.id === input.dataset.dateId);
-    if (!group) return;
-    const field = input.dataset.draftDateField;
-    if (field === "date") {
-      group.date = input.value || todayIso();
-      if (!isFutureDate(group.date)) {
-        group.futureConfirmed = false;
-        group.futureDoubleConfirmed = false;
-      }
-    } else if (field === "futureConfirmed") {
-      group.futureConfirmed = !!input.checked;
-      if (!group.futureConfirmed) group.futureDoubleConfirmed = false;
-    } else if (field === "soloSeparateConfirmed") {
-      group.soloSeparateConfirmed = !!input.checked;
-    }
-    render();
-  }
-
-  function updateDraftAppField(input) {
-    const group = ensureDraftInMemory().dates.find((item) => item.id === input.dataset.dateId);
-    if (!group) return;
-    const app = group.applications.find((item) => item.id === input.dataset.appId);
-    if (!app) return;
-    const field = input.dataset.draftAppField;
-    app[field] = input.value;
-    if (field === "productId") {
-      const product = productById(app.productId);
-      app.appliedUnit = product?.expectedAppliedUnit || "";
-      const targets = getProductTargets(product);
-      app.target = targets.length === 1 ? targets[0] : "";
-    }
-    render();
-  }
-
-  function validateDraftApplication(group, app) {
-    const errors = [];
-    const warnings = [];
-    const product = productById(app.productId);
-
-    if (!product) {
-      errors.push("Selecciona un producto del catálogo.");
-      return { errors, warnings };
-    }
-
-    if (!String(app.lot || "").trim()) {
-      errors.push("Indica el lote aplicado.");
-    }
-
-    const dose = parseLocaleNumber(app.appliedDose);
-    if (dose === null || dose <= 0) {
-      errors.push("Indica una dosis aplicada válida.");
-    }
-
-    if (!String(app.appliedUnit || "").trim()) {
-      errors.push("Indica la unidad de dosis aplicada.");
-    }
-
-    const liters = parseLocaleNumber(app.litersHa);
-    if (liters === null || liters <= 0) {
-      errors.push("Indica los litros/ha aplicados.");
-    }
-
-    const targets = getProductTargets(product);
-    if (targets.length && !String(app.target || "").trim()) {
-      errors.push("Selecciona la plaga u objetivo autorizado para la ficha.");
-    }
-
-    if (product.expectedAppliedUnit && app.appliedUnit && normalizeUnit(product.expectedAppliedUnit) !== normalizeUnit(app.appliedUnit)) {
-      warnings.push(`La unidad aplicada no coincide con la esperada (${product.expectedAppliedUnit}).`);
-    }
-
-    if (dose !== null && app.appliedUnit) {
-      const result = validateDoseAgainstRule(product, dose, app.appliedUnit);
-      if (result.error) errors.push(result.error);
-      if (result.warning) warnings.push(result.warning);
-    }
-
-    if (liters !== null) {
-      const volumeResult = validateVolumeAgainstRule(product, liters);
-      if (volumeResult.error) errors.push(volumeResult.error);
-      if (volumeResult.warning) warnings.push(volumeResult.warning);
-    }
-
-    const projected = projectedApplicationsForProduct(product.id, group.id, app.id);
-    const max = parseMaxApplications(product.maxApplications);
-    if (max !== null && projected > max) {
-      errors.push(`Se alcanzaría ${projected}/${max} aplicaciones; la app bloquea superar el máximo por campaña.`);
-    }
-
-    return { errors, warnings };
-  }
-
-  function projectedApplicationsForProduct(productId, currentDateId, currentAppId) {
-    let count = state.treatments.filter((row) => row.productId === productId).length;
-    const draft = ensureDraftInMemory();
-    for (const group of draft.dates) {
-      for (const app of group.applications) {
-        if (app.productId === productId) {
-          count += 1;
-        }
-      }
-    }
-    return count;
-  }
-
-  function draftDateHasSoloMixIssue(group) {
-    const products = group.applications.map((app) => productById(app.productId)).filter(Boolean);
-    return products.length > 1 && products.some((product) => String(product.mezcla || "").toUpperCase() === "SOLO");
-  }
-
-  async function finishDraft() {
-    const draft = ensureDraftInMemory();
-
-    if (!draft.dates.length) {
-      toast("No hay fechas en la sesión.");
-      return;
-    }
-
-    const allErrors = [];
-    for (const group of draft.dates) {
-      if (!group.applications.length) {
-        allErrors.push(`La fecha ${formatDate(group.date)} no contiene productos.`);
-      }
-      if (isFutureDate(group.date)) {
-        if (!group.futureConfirmed) {
-          allErrors.push(`La fecha ${formatDate(group.date)} es futura y no está confirmada.`);
-        } else if (!group.futureDoubleConfirmed) {
-          const ok = window.confirm(`Segunda verificación: confirma de nuevo que deseas registrar la fecha futura ${formatDate(group.date)}.`);
-          if (!ok) {
-            allErrors.push(`No se completó la segunda confirmación para ${formatDate(group.date)}.`);
-          } else {
-            group.futureDoubleConfirmed = true;
-          }
-        }
-      }
-      if (draftDateHasSoloMixIssue(group) && !group.soloSeparateConfirmed) {
-        allErrors.push(`La fecha ${formatDate(group.date)} contiene un producto SOLO junto con otros. Debes confirmar cubas distintas.`);
-      }
-      for (const app of group.applications) {
-        const validation = validateDraftApplication(group, app);
-        allErrors.push(...validation.errors.map((error) => `${formatDate(group.date)} · ${error}`));
-      }
-    }
-
-    if (allErrors.length) {
-      toast(`No se puede registrar. Revisa ${allErrors.length} bloqueo(s).`);
-      render();
-      openModal(`
-        <div class="modal">
-          <div class="modal-header">
-            <h3>Bloqueos antes de registrar</h3>
-            <button class="modal-close" data-action="close-modal" type="button" aria-label="Cerrar">×</button>
-          </div>
-          <div class="modal-body">
-            <ul class="alert-list">
-              ${allErrors.map((error) => `<li class="alert-item is-critical">${escapeHtml(error)}</li>`).join("")}
-            </ul>
-          </div>
-        </div>
-      `);
-      return;
-    }
-
-    const rows = [];
-    let nextGroupNo = nextTreatmentGroupNo();
-    for (const group of draft.dates) {
-      const groupNo = String(nextGroupNo++);
-      for (const app of group.applications) {
-        const product = productById(app.productId);
-        const row = treatmentRowFromDraft(groupNo, group, app, product);
-        rows.push(row);
-      }
-    }
-
-    for (const row of rows) {
-      await dbPut(STORES.TREATMENTS, row);
-    }
-    await dbDelete(STORES.DRAFTS, "current");
-    state.draft = null;
-    await refreshAll();
-    toast(`${rows.length} aplicación(es) registradas.`);
-    navigate("cuaderno");
-  }
-
-  function treatmentRowFromDraft(groupNo, group, app, product) {
-    const pendingFields = Array.isArray(product?.pendingFields) ? [...product.pendingFields] : [];
-    return {
-      id: uid("tr"),
-      groupNo,
-      date: group.date,
-      productId: product?.id || "",
-      productName: product?.name || "A verificar",
-      regNumber: product?.regNumber || "A verificar",
-      lot: String(app.lot || "").trim(),
-      doseRecommended: product?.doseRecommended || formatDoseRule(product?.doseRule) || "A verificar",
-      appliedDose: formatAppliedDose(app.appliedDose, app.appliedUnit),
-      appliedDoseValue: String(app.appliedDose || "").trim(),
-      appliedUnit: String(app.appliedUnit || "").trim(),
-      volumeRule: formatVolumeRule(product?.volumeRule),
-      litersHa: String(app.litersHa || "").trim(),
-      cropUse: product?.cropUse || "A verificar",
-      target: String(app.target || "").trim() || firstTarget(product) || "A verificar",
-      ps: product?.ps || "A verificar",
-      activeIngredients: product?.activeIngredients || "A verificar",
-      mezcla: product?.mezcla || "A verificar",
-      pendingFields,
-      createdAt: nowIso(),
-      updatedAt: nowIso()
-    };
-  }
-
-  function nextTreatmentGroupNo() {
-    const max = state.treatments.reduce((acc, row) => Math.max(acc, Number(row.groupNo) || 0), 0);
-    return max + 1;
-  }
-
-  // ---------- Configuración ----------
-  async function saveSettingsFromScreen() {
-    const campaign = screen.querySelector("[data-setting='campaign']")?.value?.trim() || "2026";
-    const applicator = screen.querySelector("[data-setting='applicator']")?.value?.trim() || "";
-    state.settings = {
-      ...(state.settings || { id: "main", createdAt: nowIso() }),
-      id: "main",
-      campaign,
-      applicator,
-      updatedAt: nowIso()
-    };
-    await dbPut(STORES.SETTINGS, state.settings);
-    toast("Configuración guardada.");
-    render();
-  }
-
-  // ---------- Productos ----------
-  function productById(id) {
-    return state.products.find((product) => product.id === id) || null;
-  }
-
-  function getProductTargets(product) {
-    if (!product) return [];
-    if (Array.isArray(product.targets)) return product.targets.filter(Boolean);
-    if (typeof product.targets === "string") return splitList(product.targets);
-    return [];
-  }
-
-  function firstTarget(product) {
-    return getProductTargets(product)[0] || "";
-  }
-
-  function openProductModal(productId) {
-    const product = productId ? productById(productId) : blankProduct();
-    if (!product) {
-      toast("No se ha localizado la ficha.");
-      return;
-    }
-
-    state.modalStack = [];
-    openModal(`
-      <div class="modal" data-product-modal data-product-id="${escapeAttr(product.id)}">
-        <div class="modal-header">
-          <h3>${productId ? "Editar ficha de producto" : "Nueva ficha de producto"}</h3>
-          <button class="modal-close" data-action="close-modal" type="button" aria-label="Cerrar">×</button>
-        </div>
-        <div class="modal-body stack">
-          ${renderProductForm(product)}
-          <article class="card compact">
-            <h4>Documentación técnica asociada</h4>
-            <div class="field">
-              <label for="docUpload_${escapeAttr(product.id)}">Añadir documentos</label>
-              <input id="docUpload_${escapeAttr(product.id)}" data-action="upload-product-docs" data-product-id="${escapeAttr(product.id)}" type="file" multiple accept="image/*,application/pdf,text/plain,.txt,.pdf,.jpg,.jpeg,.png,.webp">
-            </div>
-            <div id="productDocsHost" style="margin-top:12px">
-              ${renderProductDocs(product.id)}
-            </div>
-            <hr class="hr">
-            <h4>Fuente documental</h4>
-            <div id="sourceGroupsHost">
-              ${renderSourceGroups(product.id)}
-            </div>
-          </article>
-
-          <article class="card compact">
-            <h4>Extracción documental asistida</h4>
-            <div class="callout">
-              <strong>Vía A:</strong> entrada manual en la ficha. <strong>Vía B:</strong> propuestas revisables desde texto documental disponible, con evidencia y confianza.
-            </div>
-            <div class="field" style="margin-top:12px">
-              <label>Texto documental a analizar</label>
-              <textarea id="documentTextToAnalyze" placeholder="Pega texto técnico legible o carga un documento de texto para preparar propuestas."></textarea>
-            </div>
-            <div class="btn-row">
-              <button class="btn-soft" type="button" data-action="analyze-document-text">Generar propuestas</button>
-            </div>
-            <div id="proposalReviewHost" style="margin-top:12px"></div>
-          </article>
-
-          <div class="btn-row">
-            <button class="btn" type="button" data-action="save-product-modal">Guardar ficha</button>
-            <button class="btn-ghost" type="button" data-action="close-modal">Cerrar</button>
-          </div>
-        </div>
-      </div>
-    `);
-  }
-
-  function blankProduct() {
-    return {
-      id: uid("prod"),
-      name: "",
-      regNumber: "",
-      activeIngredients: "",
-      mezcla: "——",
-      cropUse: "Vid de vinificación",
-      targets: [],
-      doseRecommended: "",
-      doseRule: { mode: "text", unique: "", min: "", max: "", limit: "", unit: "" },
-      visibleDoseUnit: "",
-      expectedAppliedUnit: "",
-      volumeRule: { mode: "range", unique: "", min: "", max: "", unit: "L/ha" },
-      volumeImportedUnknown: false,
-      ps: "",
-      maxApplications: "",
-      intervalDays: "",
-      stageConditions: "",
-      source: "",
-      pendingFields: [],
-      fieldStatus: {},
-      createdAt: nowIso(),
-      updatedAt: nowIso()
-    };
-  }
-
-  function renderProductForm(product) {
-    const rule = normalizeDoseRule(product.doseRule);
-    const volume = normalizeVolumeRule(product.volumeRule);
-    return `
-      <article class="card compact">
-        <h4>Ficha técnica</h4>
-        <div class="form-grid cols-2">
-          <div class="field">
-            <label>Nombre del producto</label>
-            <input data-product-field="name" type="text" value="${escapeAttr(product.name || "")}">
-          </div>
-          <div class="field">
-            <label>N.º de registro</label>
-            <input data-product-field="regNumber" type="text" value="${escapeAttr(product.regNumber || "")}" placeholder="A verificar">
-          </div>
-          <div class="field">
-            <label>Principios activos</label>
-            <textarea data-product-field="activeIngredients">${escapeHtml(product.activeIngredients || "")}</textarea>
-          </div>
-          <div class="field">
-            <label>MEZCLA</label>
-            <select data-product-field="mezcla">
-              ${["——", "SOLO", "MEZCLABLE", "A verificar"].map((value) => `<option value="${escapeAttr(value)}" ${value === (product.mezcla || "——") ? "selected" : ""}>${escapeHtml(value)}</option>`).join("")}
-            </select>
-          </div>
-          <div class="field">
-            <label>Cultivo / uso</label>
-            <input data-product-field="cropUse" type="text" value="${escapeAttr(product.cropUse || "Vid de vinificación")}">
-          </div>
-          <div class="field">
-            <label>Plagas / objetivos autorizados</label>
-            <input data-product-field="targets" type="text" value="${escapeAttr(getProductTargets(product).join(", "))}" placeholder="Mildio, Oídio...">
-          </div>
-          <div class="field">
-            <label>Dosis recomendada visible</label>
-            <textarea data-product-field="doseRecommended">${escapeHtml(product.doseRecommended || "")}</textarea>
-          </div>
-          <div class="field">
-            <label>Regla de dosis</label>
-            <select data-product-field="doseRuleMode">
-              ${[
-                ["text", "Texto / sin regla automática"],
-                ["unique", "Valor único"],
-                ["range", "Mínimo y máximo"],
-                ["range_limit", "Mínimo, máximo y límite por ha"]
-              ].map(([value, label]) => `<option value="${value}" ${value === rule.mode ? "selected" : ""}>${label}</option>`).join("")}
-            </select>
-          </div>
-          <div class="field">
-            <label>Unidad visible de dosis</label>
-            <input data-product-field="visibleDoseUnit" type="text" value="${escapeAttr(product.visibleDoseUnit || rule.unit || "")}" placeholder="% / g-hL / kg-ha...">
-          </div>
-          <div class="field">
-            <label>Unidad aplicada esperada</label>
-            <input data-product-field="expectedAppliedUnit" type="text" value="${escapeAttr(product.expectedAppliedUnit || "")}" placeholder="kg/ha, cc/hL...">
-          </div>
-        </div>
-
-        <div class="form-grid cols-3" style="margin-top:12px">
-          <div class="field">
-            <label>Dosis única</label>
-            <input data-product-field="doseUnique" type="text" inputmode="decimal" value="${escapeAttr(rule.unique || "")}">
-          </div>
-          <div class="field">
-            <label>Dosis mínima</label>
-            <input data-product-field="doseMin" type="text" inputmode="decimal" value="${escapeAttr(rule.min || "")}">
-          </div>
-          <div class="field">
-            <label>Dosis máxima</label>
-            <input data-product-field="doseMax" type="text" inputmode="decimal" value="${escapeAttr(rule.max || "")}">
-          </div>
-          <div class="field">
-            <label>Límite por ha</label>
-            <input data-product-field="doseLimit" type="text" inputmode="decimal" value="${escapeAttr(rule.limit || "")}">
-          </div>
-        </div>
-      </article>
-
-      <article class="card compact">
-        <h4>Volumen caldo</h4>
-        ${product.volumeImportedUnknown ? `
-          <div class="callout yellowbox" style="margin-bottom:12px">
-            <strong>Estado importado:</strong> No consta volumen documentado. La ficha puede conservar este estado hasta verificación posterior.
-          </div>
-        ` : ""}
-        <div class="form-grid cols-2">
-          <div class="field">
-            <label>Tipo</label>
-            <select data-product-field="volumeMode">
-              <option value="unique" ${volume.mode === "unique" ? "selected" : ""}>Volumen único</option>
-              <option value="range" ${volume.mode === "range" ? "selected" : ""}>Volumen mínimo y máximo</option>
-            </select>
-          </div>
-          <div class="field">
-            <label>Unidad</label>
-            <input type="text" value="L/ha" readonly aria-readonly="true">
-          </div>
-          <div class="field">
-            <label>Volumen único [L/ha]</label>
-            <input data-product-field="volumeUnique" type="text" inputmode="decimal" value="${escapeAttr(volume.unique || "")}">
-          </div>
-          <div class="field">
-            <label>Volumen mínimo [L/ha]</label>
-            <input data-product-field="volumeMin" type="text" inputmode="decimal" value="${escapeAttr(volume.min || "")}">
-          </div>
-          <div class="field">
-            <label>Volumen máximo [L/ha]</label>
-            <input data-product-field="volumeMax" type="text" inputmode="decimal" value="${escapeAttr(volume.max || "")}">
-          </div>
-        </div>
-      </article>
-
-      <article class="card compact">
-        <h4>Condiciones y control</h4>
-        <div class="form-grid cols-2">
-          <div class="field">
-            <label>P.S.</label>
-            <input data-product-field="ps" type="text" value="${escapeAttr(product.ps || "")}" placeholder="28 días / No procede / A verificar">
-          </div>
-          <div class="field">
-            <label>Máximo de aplicaciones por campaña</label>
-            <input data-product-field="maxApplications" type="text" inputmode="numeric" value="${escapeAttr(product.maxApplications || "")}" placeholder="3 / NO CONSTA">
-          </div>
-          <div class="field">
-            <label>Intervalo entre aplicaciones</label>
-            <input data-product-field="intervalDays" type="text" value="${escapeAttr(product.intervalDays || "")}" placeholder="Días o A verificar">
-          </div>
-          <div class="field">
-            <label>Estadio o condiciones de aplicación</label>
-            <input data-product-field="stageConditions" type="text" value="${escapeAttr(product.stageConditions || "")}">
-          </div>
-          <div class="field" style="grid-column:1/-1">
-            <label>Fuente documental</label>
-            <textarea data-product-field="source">${escapeHtml(product.source || "")}</textarea>
-          </div>
-        </div>
-      </article>
-    `;
-  }
-
-  function collectProductForm() {
-    const modal = modalRoot.querySelector("[data-product-modal]");
-    if (!modal) return null;
-    const id = modal.dataset.productId;
-    const existing = productById(id) || blankProduct();
-    existing.id = id || existing.id;
-
-    const get = (field) => modal.querySelector(`[data-product-field="${field}"]`)?.value ?? "";
-
+  function normalizeProduct(p={}) {
     const product = {
-      ...existing,
-      name: get("name").trim(),
-      regNumber: get("regNumber").trim(),
-      activeIngredients: get("activeIngredients").trim(),
-      mezcla: get("mezcla").trim() || "——",
-      cropUse: get("cropUse").trim(),
-      targets: splitList(get("targets")),
-      doseRecommended: get("doseRecommended").trim(),
-      visibleDoseUnit: get("visibleDoseUnit").trim(),
-      expectedAppliedUnit: get("expectedAppliedUnit").trim(),
-      ps: get("ps").trim(),
-      maxApplications: get("maxApplications").trim(),
-      intervalDays: get("intervalDays").trim(),
-      stageConditions: get("stageConditions").trim(),
-      source: get("source").trim(),
-      doseRule: {
-        mode: get("doseRuleMode") || "text",
-        unique: get("doseUnique").trim(),
-        min: get("doseMin").trim(),
-        max: get("doseMax").trim(),
-        limit: get("doseLimit").trim(),
-        unit: get("visibleDoseUnit").trim()
-      },
-      volumeRule: {
-        mode: get("volumeMode") || "range",
-        unique: get("volumeUnique").trim(),
-        min: get("volumeMin").trim(),
-        max: get("volumeMax").trim(),
-        unit: "L/ha"
-      },
-      updatedAt: nowIso()
+      id: p.id || uid('prod'),
+      name: p.name || 'Producto sin nombre',
+      registration: p.registration || 'A verificar',
+      activeIngredients: p.activeIngredients || 'A verificar',
+      mix: p.mix || 'A verificar',
+      status: p.status === 'verified' ? 'verified' : 'pending',
+      archived: Boolean(p.archived),
+      uses: Array.isArray(p.uses) && p.uses.length ? p.uses.map(normalizeUse) : [blankUse()],
+      docs: Array.isArray(p.docs) ? p.docs : [],
+      createdAt: p.createdAt || nowIso(),
+      updatedAt: p.updatedAt || nowIso()
     };
-
-    if (!product.createdAt) product.createdAt = nowIso();
-    product.pendingFields = inferPendingFields(product);
-    product.fieldStatus = product.fieldStatus || {};
+    product.status = productIsVerified(product) ? 'verified' : 'pending';
     return product;
   }
+  function normalizeApp(a={}) {
+    return {
+      id: a.id || uid('apl'),
+      productId: a.productId || '',
+      productNameSnapshot: a.productNameSnapshot || '',
+      lot: a.lot || '',
+      crop: a.crop || 'Vid de vinificación',
+      target: a.target || '',
+      doseApplied: a.doseApplied ?? '',
+      doseUnit: a.doseUnit || '',
+      lha: a.lha ?? '',
+      observations: a.observations || '',
+      incidence: a.incidence || '',
+      createdAt: a.createdAt || nowIso(),
+      updatedAt: a.updatedAt || nowIso()
+    };
+  }
+  function normalizeIntervention(i={}) {
+    return {
+      id: i.id || uid('int'),
+      date: i.date || todayIso(),
+      applications: Array.isArray(i.applications) ? i.applications.map(normalizeApp) : [],
+      createdAt: i.createdAt || nowIso(),
+      updatedAt: i.updatedAt || nowIso()
+    };
+  }
+  function normalizeDraft(d={}) {
+    return {
+      id: d.id || uid('draft'),
+      title: d.title || `Borrador ${fmtDate(todayIso())}`,
+      groups: Array.isArray(d.groups) ? d.groups.map(g => ({
+        id: g.id || uid('grupo'),
+        date: g.date || '',
+        futureConfirmed: Boolean(g.futureConfirmed),
+        applications: Array.isArray(g.applications) ? g.applications.map(normalizeApp) : []
+      })) : [],
+      currentGroupId: d.currentGroupId || '',
+      createdAt: d.createdAt || nowIso(),
+      updatedAt: d.updatedAt || nowIso()
+    };
+  }
+  function migrate(data={}) {
+    const base = blankState();
+    return {
+      ...base,
+      ...data,
+      version: VERSION,
+      settings: { ...base.settings, ...(data.settings || {}) },
+      products: Array.isArray(data.products) ? data.products.map(normalizeProduct) : [],
+      interventions: Array.isArray(data.interventions) ? data.interventions.map(normalizeIntervention) : [],
+      drafts: Array.isArray(data.drafts) ? data.drafts.map(normalizeDraft) : [],
+      resolvedAlerts: Array.isArray(data.resolvedAlerts) ? data.resolvedAlerts : [],
+      importHistory: Array.isArray(data.importHistory) ? data.importHistory : []
+    };
+  }
+  function load() {
+    try { return migrate(JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null') || {}); }
+    catch { return blankState(); }
+  }
+  let state = load();
+  function save() { state.updatedAt = nowIso(); localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
+  function mutate(fn, message='') { fn(state); save(); renderAll(); if (message) toast(message); }
 
-  async function saveProductModal() {
-    const product = collectProductForm();
-    if (!product) return;
-    if (!product.name) {
-      toast("Indica el nombre del producto.");
-      return;
-    }
-    await dbPut(STORES.PRODUCTS, product);
-    await refreshAll();
-    await syncPendingTreatmentTechnicalFields(product);
-    closeModal();
-    toast("Ficha guardada.");
-    render();
+  function toast(message, tone='info') {
+    const id = uid('toast');
+    refs.toast.insertAdjacentHTML('beforeend', `<div id="${id}" class="toast toast-${esc(tone)}">${esc(message)}</div>`);
+    setTimeout(() => $(`#${id}`)?.remove(), 3600);
+  }
+  function badge(text, tone='neutral') { return `<span class="badge badge-${esc(tone)}">${esc(text)}</span>`; }
+  function statusBadge(p) { return badge(p?.status === 'verified' ? 'Verificado' : 'A verificar', p?.status === 'verified' ? 'success' : 'warning'); }
+  function modal(html, cls='') {
+    refs.modal.innerHTML = `<div class="modal-backdrop" data-close-modal></div><section class="modal ${esc(cls)}" role="dialog" aria-modal="true">${html}</section>`;
+    $$('[data-close-modal]', refs.modal).forEach(b => b.addEventListener('click', closeModal));
+  }
+  function closeModal(){ refs.modal.innerHTML=''; }
+  function confirmBox(title, message, onConfirm, confirmText='Confirmar', danger=false) {
+    modal(`<div class="modal-head"><h2>${esc(title)}</h2><button class="icon-button" data-close-modal type="button">×</button></div><p>${esc(message)}</p><div class="action-row"><button class="secondary-button" data-close-modal type="button">Cancelar</button><button id="modalConfirm" class="${danger?'danger-button':'primary-button'}" type="button">${esc(confirmText)}</button></div>`);
+    $('#modalConfirm', refs.modal)?.addEventListener('click', () => { closeModal(); onConfirm?.(); });
+  }
+  function futureDoubleConfirm(iso, done) {
+    confirmBox('Fecha futura detectada', `Has indicado ${fmtDate(iso)}. La app bloquea inicialmente fechas futuras.`, () => {
+      confirmBox('Segunda verificación', `Confirma de forma expresa que deseas registrar ${fmtDate(iso)}.`, done, 'Confirmar fecha futura', true);
+    }, 'Continuar');
   }
 
-  async function deleteProduct(productId) {
-    const product = productById(productId);
-    if (!product) return;
-    const relatedRows = state.treatments.filter((row) => row.productId === productId).length;
-    if (relatedRows > 0) {
-      toast("No se elimina: la ficha ya está vinculada a tratamientos registrados.");
-      return;
-    }
-    const ok = window.confirm(`Eliminar la ficha "${product.name}" y sus documentos asociados?`);
-    if (!ok) return;
-
-    const docs = state.documents.filter((doc) => doc.productId === productId);
-    for (const doc of docs) {
-      await dbDelete(STORES.DOCUMENTS, doc.id);
-    }
-    await dbDelete(STORES.PRODUCTS, productId);
-    await refreshAll();
-    toast("Ficha eliminada.");
-    render();
+  function byName(name){ const n=norm(name); return state.products.find(p => norm(p.name)===n) || null; }
+  function product(id){ return state.products.find(p => p.id===id) || null; }
+  function draft(){ return state.drafts.find(d => d.id===ui.activeDraftId) || null; }
+  function apps(){ return state.interventions.flatMap(i => i.applications.map(a => ({intervention:i, app:a}))); }
+  function productUse(p,a){ return p?.uses.find(u => norm(u.crop)===norm(a.crop) && (!u.target || norm(u.target)===norm(a.target))) || p?.uses.find(u => norm(u.crop)===norm(a.crop)) || p?.uses[0] || null; }
+  function prodCount(id){ return apps().filter(x => x.app.productId===id).length; }
+  function interventionNumbers(){ const map=new Map(); [...state.interventions].sort((a,b)=>a.date.localeCompare(b.date)).forEach((i,n)=>map.set(i.id,n+1)); return map; }
+  function productIsVerified(p) {
+    const base = p?.name && p.registration && p.registration!=='A verificar' && p.activeIngredients && p.activeIngredients!=='A verificar' && p.mix && p.mix!=='A verificar';
+    const use = p?.uses?.some(u => u.crop && u.target && u.ps && u.ps!=='A verificar' && u.doseDisplay && u.doseDisplay!=='A verificar' && u.doseRule?.kind!=='unset' && u.volumeDisplay && u.volumeDisplay!=='A verificar' && u.volumeRule?.kind!=='unset');
+    return Boolean(base && use);
   }
-
-  function inferPendingFields(product) {
-    const pending = [];
-    if (!product.regNumber) pending.push("regNumber");
-    if (!product.activeIngredients) pending.push("activeIngredients");
-    if (!product.mezcla || product.mezcla === "A verificar") pending.push("mezcla");
-    if (!product.cropUse) pending.push("cropUse");
-    if (!getProductTargets(product).length) pending.push("targets");
-    if (!product.doseRecommended) pending.push("doseRecommended");
-    if (!product.expectedAppliedUnit) pending.push("expectedAppliedUnit");
-    if (!product.ps) pending.push("ps");
-    if (!product.maxApplications) pending.push("maxApplications");
-    if (!product.source) pending.push("source");
-
-    const doseRule = normalizeDoseRule(product.doseRule);
-    if (doseRule.mode !== "text") {
-      if (doseRule.mode === "unique" && !doseRule.unique) pending.push("doseRule");
-      if (doseRule.mode === "range" && (!doseRule.min || !doseRule.max)) pending.push("doseRule");
-      if (doseRule.mode === "range_limit" && (!doseRule.min || !doseRule.max || !doseRule.limit)) pending.push("doseRule");
-    }
-
-    const volume = normalizeVolumeRule(product.volumeRule);
-    if (!product.volumeImportedUnknown) {
-      if (volume.mode === "unique" && !volume.unique) pending.push("volumeRule");
-      if (volume.mode === "range" && (!volume.min || !volume.max)) pending.push("volumeRule");
-    }
-
-    return Array.from(new Set(pending));
-  }
-
-  async function syncPendingTreatmentTechnicalFields(product) {
-    const rows = state.treatments.filter((row) => row.productId === product.id);
-    for (const row of rows) {
-      const pendingSet = new Set(row.pendingFields || []);
-      const updated = { ...row };
-      let changed = false;
-
-      const updateIfPending = (field, value) => {
-        if (pendingSet.has(field) || String(updated[field] || "").toLowerCase() === "a verificar") {
-          if (value) {
-            updated[field] = value;
-            pendingSet.delete(field);
-            changed = true;
-          }
+  function searchMatch(...vals){ return !ui.search || norm(vals.filter(Boolean).join(' ')).includes(norm(ui.search)); }
+  function dosePerHa(a){ const d=num(a.doseApplied), l=num(a.lha); if(d===null||l===null) return null; const u=norm(a.doseUnit); return u.includes('/hl') ? d*(l/100) : u.includes('/ha') ? d : null; }
+  function validate(a, ctx={}) {
+    const issues=[]; const p=product(a.productId); const u=productUse(p,a); const g=ctx.group;
+    if(!p) issues.push({id:'p',severity:'blocking',text:'Debes seleccionar o crear un producto.'});
+    if(!String(a.lot||'').trim()) issues.push({id:'lot',severity:'blocking',text:'El lote es obligatorio.'});
+    if(!String(a.crop||'').trim()) issues.push({id:'crop',severity:'blocking',text:'El cultivo/uso es obligatorio.'});
+    if(!String(a.target||'').trim()) issues.push({id:'target',severity:'blocking',text:'La plaga u objetivo es obligatorio.'});
+    if(num(a.doseApplied)===null) issues.push({id:'dose',severity:'blocking',text:'La dosis aplicada debe ser numérica.'});
+    if(!String(a.doseUnit||'').trim()) issues.push({id:'unit',severity:'blocking',text:'La unidad de dosis es obligatoria.'});
+    if(num(a.lha)===null) issues.push({id:'lha',severity:'blocking',text:'Los litros/ha deben ser numéricos.'});
+    if(g?.applications?.some(x => x.productId===a.productId && x.id!==a.id)) issues.push({id:'dup',severity:'blocking',text:'No se permite el mismo producto dos veces en la misma fecha.'});
+    if(ctx.date && isFuture(ctx.date) && !ctx.futureConfirmed) issues.push({id:'future',severity:'blocking',text:'La fecha futura requiere doble verificación.'});
+    if(p){
+      if(p.status!=='verified') issues.push({id:'pending',severity:'warning',text:'La ficha del producto está A verificar.'});
+      if(!u) issues.push({id:'use',severity:'warning',text:'La ficha técnica no tiene uso asociado.'});
+      if(u){
+        const d=num(a.doseApplied), l=num(a.lha), r=u.doseRule||{}, vr=u.volumeRule||{};
+        if(r.kind!=='unset' && r.unit && norm(r.unit)!==norm(a.doseUnit)) issues.push({id:'unitMismatch',severity:'blocking',text:`La unidad aplicada no coincide con la regla técnica (${r.unit}).`});
+        if(d!==null && r.kind==='single' && r.value!==null && d!==Number(r.value)) issues.push({id:'doseSingle',severity:'blocking',text:`La dosis debe ser ${r.value} ${r.unit}.`});
+        if(d!==null && r.kind==='range'){
+          if(r.min!==null && d<Number(r.min)) issues.push({id:'doseMin',severity:'blocking',text:`La dosis queda por debajo del mínimo: ${r.min} ${r.unit}.`});
+          if(r.max!==null && d>Number(r.max)) issues.push({id:'doseMax',severity:'blocking',text:`La dosis supera el máximo: ${r.max} ${r.unit}.`});
         }
-      };
-
-      updateIfPending("regNumber", product.regNumber);
-      updateIfPending("activeIngredients", product.activeIngredients);
-      updateIfPending("mezcla", product.mezcla);
-      updateIfPending("cropUse", product.cropUse);
-      updateIfPending("ps", product.ps);
-      updateIfPending("doseRecommended", product.doseRecommended || formatDoseRule(product.doseRule));
-      updateIfPending("volumeRule", formatVolumeRule(product.volumeRule));
-      if ((pendingSet.has("targets") || String(updated.target || "").toLowerCase() === "a verificar") && firstTarget(product)) {
-        updated.target = firstTarget(product);
-        pendingSet.delete("targets");
-        changed = true;
-      }
-
-      updated.pendingFields = Array.from(pendingSet);
-      updated.updatedAt = nowIso();
-      if (changed) {
-        await dbPut(STORES.TREATMENTS, updated);
+        if(r.limitHa!==null){ const ha=dosePerHa(a); if(ha!==null && ha>Number(r.limitHa)) issues.push({id:'limitHa',severity:'blocking',text:`La equivalencia por hectárea supera el límite ${r.limitHa}.`}); }
+        if(l!==null && vr.kind==='single' && vr.value!==null && l!==Number(vr.value)) issues.push({id:'volSingle',severity:'blocking',text:`El volumen debe ser ${vr.value} L/ha.`});
+        if(l!==null && vr.kind==='range'){
+          if(vr.min!==null && l<Number(vr.min)) issues.push({id:'volMin',severity:'blocking',text:`El volumen queda por debajo de ${vr.min} L/ha.`});
+          if(vr.max!==null && l>Number(vr.max)) issues.push({id:'volMax',severity:'blocking',text:`El volumen supera ${vr.max} L/ha.`});
+        }
+        const max=num(u.maxApplications);
+        if(max!==null){
+          const already=apps().filter(x=>x.app.productId===a.productId).length;
+          const inDraft=g?.applications?.filter(x=>x.productId===a.productId && x.id!==a.id).length || 0;
+          if(already+inDraft+1>max) issues.push({id:'maxApps',severity:'blocking',text:`Se supera el máximo de ${max} aplicaciones por campaña.`});
+        }
       }
     }
-    await refreshAll();
+    return issues;
   }
-
-  // ---------- Documentación ----------
-  async function onModalChange(event) {
-    const upload = event.target.closest("[data-action='upload-product-docs']");
-    if (upload && upload.files?.length) {
-      await addProductDocuments(upload.dataset.productId, Array.from(upload.files));
-      upload.value = "";
-      return;
-    }
-  }
-
-  async function onModalInput(event) {
-    // Reservado para extensiones futuras sin redibujar formularios.
-  }
-
-  async function addProductDocuments(productId, files) {
-    const existing = state.documents.filter((doc) => doc.productId === productId);
-    let added = 0;
-
-    for (const file of files) {
-      const duplicate = existing.find((doc) =>
-        doc.name === file.name &&
-        Number(doc.size || 0) === Number(file.size || 0)
-      );
-      if (duplicate) continue;
-
-      const doc = {
-        id: uid("doc"),
-        productId,
-        name: file.name,
-        type: file.type || guessMime(file.name),
-        size: file.size || 0,
-        addedAt: nowIso(),
-        blob: file
-      };
-      await dbPut(STORES.DOCUMENTS, doc);
-      added += 1;
-    }
-
-    await refreshAll();
-    updateProductDocsArea(productId);
-    toast(added ? `${added} documento(s) añadido(s).` : "No se añadieron duplicados.");
-  }
-
-  function updateProductDocsArea(productId) {
-    const docsHost = modalRoot.querySelector("#productDocsHost");
-    const sourceHost = modalRoot.querySelector("#sourceGroupsHost");
-    if (docsHost) docsHost.innerHTML = renderProductDocs(productId);
-    if (sourceHost) sourceHost.innerHTML = renderSourceGroups(productId);
-  }
-
-  function renderProductDocs(productId) {
-    const docs = state.documents.filter((doc) => doc.productId === productId);
-    if (!docs.length) return `<div class="empty">No hay documentos asociados.</div>`;
-    return `
-      <ul class="doc-list">
-        ${docs.map((doc) => `
-          <li class="doc-item">
-            <div class="item-head">
-              <div>
-                <strong>${escapeHtml(doc.name)}</strong>
-                <p class="muted small">${escapeHtml(formatBytes(doc.size))} · ${escapeHtml(formatDateTime(doc.addedAt))}</p>
-              </div>
-              <div class="item-actions">
-                ${isImageDoc(doc) ? `<button class="btn-soft" type="button" data-action="view-image-doc" data-doc-id="${escapeAttr(doc.id)}">Ver imagen ampliada</button>` : ""}
-                ${isTextDoc(doc) ? `<button class="btn-soft" type="button" data-action="load-doc-text" data-doc-id="${escapeAttr(doc.id)}">Usar texto</button>` : ""}
-                <button class="btn-danger" type="button" data-action="delete-product-doc" data-doc-id="${escapeAttr(doc.id)}" data-product-id="${escapeAttr(productId)}">Eliminar</button>
-              </div>
-            </div>
-          </li>
-        `).join("")}
-      </ul>
-    `;
-  }
-
-  function renderSourceGroups(productId) {
-    const docs = state.documents.filter((doc) => doc.productId === productId);
-    if (!docs.length) return `<div class="empty">Sin fuentes documentales guardadas.</div>`;
-
-    const byDate = new Map();
-    for (const doc of docs) {
-      const date = String(doc.addedAt || nowIso()).slice(0, 10);
-      if (!byDate.has(date)) byDate.set(date, []);
-      byDate.get(date).push(doc);
-    }
-
-    return `
-      <ul class="source-list">
-        ${Array.from(byDate.entries()).sort(([a],[b]) => b.localeCompare(a)).map(([date, grouped]) => `
-          <li class="source-item">
-            <div class="document-source-date">${formatDate(date)}</div>
-            <div class="inline-toolbar" style="margin-top:8px">
-              ${dedupeDocs(grouped).map((doc) => `<span class="file-pill">${escapeHtml(doc.name)}</span>`).join("")}
-            </div>
-          </li>
-        `).join("")}
-      </ul>
-    `;
-  }
-
-  function dedupeDocs(docs) {
-    const seen = new Set();
-    return docs.filter((doc) => {
-      const key = `${doc.name}|${doc.size}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
+  function blockers(issues){ return issues.filter(i=>i.severity==='blocking'); }
+  function alertList(){
+    const out=[];
+    state.products.filter(p=>!p.archived && p.status!=='verified').forEach(p=>out.push({id:`prod_${p.id}`,tone:'warning',title:`${p.name}: ficha A verificar`,detail:'Faltan datos técnicos obligatorios.',productId:p.id,resolvable:false}));
+    apps().forEach(({intervention,app})=>{
+      const p=product(app.productId);
+      validate(app,{date:intervention.date,futureConfirmed:true}).filter(i=>i.id!=='future').forEach(i=>out.push({id:`val_${intervention.id}_${app.id}_${i.id}`,tone:i.severity==='blocking'?'danger':'warning',title:`${p?.name || app.productNameSnapshot || 'Aplicación'} · ${fmtDate(intervention.date)}`,detail:i.text,resolvable:false}));
+      if(String(app.incidence||'').trim()){
+        const id=`inc_${intervention.id}_${app.id}`;
+        if(!state.resolvedAlerts.includes(id)) out.push({id,tone:'danger',title:`${p?.name || app.productNameSnapshot || 'Aplicación'} · incidencia`,detail:app.incidence,resolvable:true});
+      }
     });
+    return out.filter(a=>searchMatch(a.title,a.detail));
   }
 
-  // ---------- Modal / propuestas ----------
-  async function onModalClick(event) {
-    const actionBtn = event.target.closest("[data-action]");
-    if (!actionBtn) {
-      if (event.target === modalRoot) closeModal();
-      return;
-    }
+  function openDb(){ return new Promise((res,rej)=>{ const r=indexedDB.open(DOC_DB,1); r.onupgradeneeded=()=>{ const db=r.result; if(!db.objectStoreNames.contains(DOC_STORE)) db.createObjectStore(DOC_STORE); }; r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error); }); }
+  async function putDoc(id, blob){ const db=await openDb(); return new Promise((res,rej)=>{ const tx=db.transaction(DOC_STORE,'readwrite'); tx.objectStore(DOC_STORE).put(blob,id); tx.oncomplete=()=>{db.close();res();}; tx.onerror=()=>{db.close();rej(tx.error);}; }); }
+  async function getDoc(id){ const db=await openDb(); return new Promise((res,rej)=>{ const tx=db.transaction(DOC_STORE,'readonly'); const r=tx.objectStore(DOC_STORE).get(id); r.onsuccess=()=>{db.close();res(r.result||null);}; r.onerror=()=>{db.close();rej(r.error);}; }); }
+  async function delDoc(id){ const db=await openDb(); return new Promise((res,rej)=>{ const tx=db.transaction(DOC_STORE,'readwrite'); tx.objectStore(DOC_STORE).delete(id); tx.oncomplete=()=>{db.close();res();}; tx.onerror=()=>{db.close();rej(tx.error);}; }); }
 
-    const action = actionBtn.dataset.action;
-    switch (action) {
-      case "close-modal":
-        closeModal();
-        break;
-      case "save-product-modal":
-        await saveProductModal();
-        break;
-      case "delete-product-doc":
-        await deleteProductDocument(actionBtn.dataset.docId, actionBtn.dataset.productId);
-        break;
-      case "view-image-doc":
-        await openImageViewer(actionBtn.dataset.docId);
-        break;
-      case "load-doc-text":
-        await loadDocumentTextIntoAnalyzer(actionBtn.dataset.docId);
-        break;
-      case "analyze-document-text":
-        analyzeDocumentText();
-        break;
-      case "apply-reviewed-proposals":
-        applyReviewedProposalsToForm();
-        break;
-      default:
-        break;
-    }
-  }
+  function renderAll(){ syncView(); renderInicio(); renderNuevo(); renderCuaderno(); renderAlertas(); renderMas(); }
+  function syncView(){ refs.nav.forEach(b=>b.classList.toggle('active',b.dataset.nav===ui.view)); Object.entries(refs.views).forEach(([k,v])=>v.classList.toggle('active',k===ui.view)); }
+  function setView(v){ ui.view=v; renderAll(); window.scrollTo({top:0,behavior:'smooth'}); }
+  function linkViews(root){ $$('[data-open-view]',root).forEach(b=>b.addEventListener('click',()=>setView(b.dataset.openView))); }
 
-  function openModal(html, { stack = true } = {}) {
-    if (stack && !modalRoot.classList.contains("is-hidden") && modalRoot.innerHTML.trim()) {
-      state.modalStack.push(modalRoot.innerHTML);
-    }
-    modalRoot.innerHTML = html;
-    modalRoot.classList.remove("is-hidden");
-    modalRoot.setAttribute("aria-hidden", "false");
-    document.body.style.overflow = "hidden";
-  }
-
-  function closeModal() {
-    if (state.modalStack.length) {
-      modalRoot.innerHTML = state.modalStack.pop();
-      modalRoot.classList.remove("is-hidden");
-      modalRoot.setAttribute("aria-hidden", "false");
-      document.body.style.overflow = "hidden";
-      return;
-    }
-    modalRoot.innerHTML = "";
-    modalRoot.classList.add("is-hidden");
-    modalRoot.setAttribute("aria-hidden", "true");
-    document.body.style.overflow = "";
-  }
-
-  async function deleteProductDocument(docId, productId) {
-    const doc = state.documents.find((item) => item.id === docId);
-    if (!doc) return;
-    const ok = window.confirm(`Eliminar "${doc.name}" de la ficha?`);
-    if (!ok) return;
-    await dbDelete(STORES.DOCUMENTS, docId);
-    await refreshAll();
-    updateProductDocsArea(productId);
-    toast("Documento eliminado.");
-  }
-
-  async function openImageViewer(docId) {
-    const doc = state.documents.find((item) => item.id === docId);
-    if (!doc || !doc.blob) return;
-    const url = URL.createObjectURL(doc.blob);
-    openModal(`
-      <div class="modal">
-        <div class="modal-header">
-          <h3>Ver imagen ampliada</h3>
-          <button class="modal-close" data-action="close-modal" type="button" aria-label="Cerrar">×</button>
-        </div>
-        <div class="modal-body image-viewer">
-          <img src="${escapeAttr(url)}" alt="${escapeAttr(doc.name)}">
-          <p class="muted small">${escapeHtml(doc.name)}</p>
-        </div>
-      </div>
-    `);
-    const cleanup = () => URL.revokeObjectURL(url);
-    modalRoot.addEventListener("transitionend", cleanup, { once: true });
-    setTimeout(cleanup, 60_000);
-  }
-
-  async function loadDocumentTextIntoAnalyzer(docId) {
-    const doc = state.documents.find((item) => item.id === docId);
-    if (!doc?.blob) return;
-    try {
-      const text = await doc.blob.text();
-      const textarea = modalRoot.querySelector("#documentTextToAnalyze");
-      if (textarea) {
-        textarea.value = text.slice(0, 120000);
-        toast("Texto cargado para revisión.");
-      }
-    } catch (error) {
-      console.error(error);
-      toast("No se pudo leer el texto del documento.");
-    }
-  }
-
-  function analyzeDocumentText() {
-    const textarea = modalRoot.querySelector("#documentTextToAnalyze");
-    const host = modalRoot.querySelector("#proposalReviewHost");
-    if (!textarea || !host) return;
-    const text = textarea.value.trim();
-    if (!text) {
-      toast("Pega o carga texto documental antes de generar propuestas.");
-      return;
-    }
-    const proposals = extractProposals(text);
-    host.innerHTML = renderProposalReview(proposals);
-    toast(`${proposals.length} propuesta(s) generadas.`);
-  }
-
-  function renderProposalReview(proposals) {
-    const proposalMap = new Map(proposals.map((proposal) => [proposal.field, proposal]));
-    const cards = TECH_FIELDS.map((field) => {
-      const proposal = proposalMap.get(field) || null;
-      const label = REVIEW_FIELD_LABELS[field] || field;
-      const value = proposal?.value || "A verificar";
-      const evidence = proposal?.evidence || "No se identificó evidencia suficiente para proponer un valor.";
-      const confidence = proposal?.confidence || "Baja";
-      const badgeClass = confidence === "Alta" ? "badge-green" : confidence === "Media" ? "badge-yellow" : "badge-red";
-      return `
-        <article class="review-card pending" data-review-field="${escapeAttr(field)}">
-          <div class="review-head">
-            <div>
-              <strong>${escapeHtml(label)}</strong>
-              <p class="muted small">Propuesta: ${escapeHtml(value)}</p>
-            </div>
-            <span class="badge ${badgeClass}">${escapeHtml(confidence)}</span>
-          </div>
-          <div class="review-evidence"><strong>Evidencia:</strong> ${escapeHtml(evidence)}</div>
-          <label class="inline-check">
-            <input class="check-blue" type="checkbox" data-review-accept="${escapeAttr(field)}" ${proposal ? "" : "disabled"}>
-            <span>${proposal ? "Aceptar propuesta" : "Sin propuesta automática: dejar A verificar o introducir valor manual"}</span>
-          </label>
-          <div class="field">
-            <label>Entrada manual alternativa</label>
-            <textarea data-review-manual="${escapeAttr(field)}" placeholder="El valor manual aceptado prevalece sobre la propuesta."></textarea>
-          </div>
-        </article>
-      `;
-    }).join("");
-
-    return `
-      <div class="review-grid">
-        ${cards}
-      </div>
-      <div class="btn-row" style="margin-top:12px">
-        <button class="btn" type="button" data-action="apply-reviewed-proposals">Aplicar revisión a la ficha</button>
-      </div>
-    `;
-  }
-
-  function applyReviewedProposalsToForm() {
-    const cards = Array.from(modalRoot.querySelectorAll("[data-review-field]"));
-    if (!cards.length) {
-      toast("No hay propuestas para aplicar.");
-      return;
-    }
-    let applied = 0;
-    for (const card of cards) {
-      const field = card.dataset.reviewField;
-      const accept = card.querySelector(`[data-review-accept="${cssEscape(field)}"]`)?.checked;
-      const manual = card.querySelector(`[data-review-manual="${cssEscape(field)}"]`)?.value?.trim() || "";
-      const proposed = card.querySelector(".review-head .muted")?.textContent?.replace(/^Propuesta:\s*/, "")?.trim() || "";
-      const chosen = manual || (accept ? proposed : "");
-      if (!chosen) continue;
-      setProductFieldValue(field, chosen);
-      applied += 1;
-    }
-    toast(`${applied} campo(s) preparados en la ficha. Revisa y guarda.`);
-  }
-
-  function setProductFieldValue(field, value) {
-    const set = (selector, val) => {
-      const el = modalRoot.querySelector(selector);
-      if (el) el.value = val;
-    };
-    switch (field) {
-      case "regNumber":
-        set(`[data-product-field="regNumber"]`, value);
-        break;
-      case "activeIngredients":
-        set(`[data-product-field="activeIngredients"]`, value);
-        break;
-      case "mezcla":
-        set(`[data-product-field="mezcla"]`, value);
-        break;
-      case "cropUse":
-        set(`[data-product-field="cropUse"]`, value);
-        break;
-      case "targets":
-        set(`[data-product-field="targets"]`, value);
-        break;
-      case "doseRecommended":
-        set(`[data-product-field="doseRecommended"]`, value);
-        break;
-      case "visibleDoseUnit":
-        set(`[data-product-field="visibleDoseUnit"]`, value);
-        break;
-      case "expectedAppliedUnit":
-        set(`[data-product-field="expectedAppliedUnit"]`, value);
-        break;
-      case "ps":
-        set(`[data-product-field="ps"]`, value);
-        break;
-      case "maxApplications":
-        set(`[data-product-field="maxApplications"]`, value);
-        break;
-      case "intervalDays":
-        set(`[data-product-field="intervalDays"]`, value);
-        break;
-      case "stageConditions":
-        set(`[data-product-field="stageConditions"]`, value);
-        break;
-      case "source":
-        set(`[data-product-field="source"]`, value);
-        break;
-      case "doseRule":
-        applyDoseRuleText(value);
-        break;
-      case "volumeRule":
-        applyVolumeRuleText(value);
-        break;
-      default:
-        break;
-    }
-  }
-
-  function applyDoseRuleText(value) {
-    const lower = value.toLowerCase();
-    const nums = extractNumbers(value);
-    if (lower.includes("único") && nums.length >= 1) {
-      setField("doseRuleMode", "unique");
-      setField("doseUnique", nums[0]);
-      return;
-    }
-    if (lower.includes("límite") && nums.length >= 3) {
-      setField("doseRuleMode", "range_limit");
-      setField("doseMin", nums[0]);
-      setField("doseMax", nums[1]);
-      setField("doseLimit", nums[2]);
-      return;
-    }
-    if (nums.length >= 2) {
-      setField("doseRuleMode", "range");
-      setField("doseMin", nums[0]);
-      setField("doseMax", nums[1]);
-      return;
-    }
-    setField("doseRecommended", value);
-  }
-
-  function applyVolumeRuleText(value) {
-    const lower = value.toLowerCase();
-    const nums = extractNumbers(value);
-    if (lower.includes("único") && nums.length >= 1) {
-      setField("volumeMode", "unique");
-      setField("volumeUnique", nums[0]);
-      return;
-    }
-    if (nums.length >= 2) {
-      setField("volumeMode", "range");
-      setField("volumeMin", nums[0]);
-      setField("volumeMax", nums[1]);
-    }
-  }
-
-  function setField(field, value) {
-    const el = modalRoot.querySelector(`[data-product-field="${field}"]`);
-    if (el) el.value = value;
-  }
-
-  function extractProposals(text) {
-    const proposals = [];
-    const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-    const sourceSnippet = lines.slice(0, 3).join(" · ").slice(0, 180);
-
-    addProposal(proposals, "source", "Documento textual analizado", sourceSnippet || "Texto aportado", "Media");
-
-    const reg = text.match(/(?:n[.º°o]?\s*de\s*registro|registro)\s*[:#]?\s*([A-Z]{0,4}-?\d{4,6})/i);
-    if (reg) addProposal(proposals, "regNumber", reg[1], reg[0], "Alta");
-
-    if (/solo\b/i.test(text)) {
-      addProposal(proposals, "mezcla", "SOLO", matchEvidence(text, /solo\b/i), "Media");
-    } else if (/mezclable|compatible/i.test(text)) {
-      addProposal(proposals, "mezcla", "MEZCLABLE", matchEvidence(text, /mezclable|compatible/i), "Media");
-    }
-
-    if (/vid|viña|viñedo/i.test(text)) {
-      addProposal(proposals, "cropUse", "Vid de vinificación", matchEvidence(text, /vid|viña|viñedo/i), "Media");
-    }
-
-    const targets = [];
-    if (/mildio/i.test(text)) targets.push("Mildio");
-    if (/o[ií]dio/i.test(text)) targets.push("Oídio");
-    if (/botritis|podredumbre gris/i.test(text)) targets.push("Botritis");
-    if (targets.length) addProposal(proposals, "targets", targets.join(", "), targets.join(" · "), "Media");
-
-    const ps = text.match(/(?:p\.?\s*s\.?|plazo\s+de\s+seguridad)\s*[:\-]?\s*(\d+\s*d[ií]as|no\s+procede)/i);
-    if (ps) addProposal(proposals, "ps", normalizePs(ps[1]), ps[0], "Alta");
-
-    const maxApps = text.match(/(?:m[aá]ximo|max\.?)\s*(?:de)?\s*(\d+)\s*(?:aplicaciones|tratamientos).*?(?:campaña|año)/i);
-    if (maxApps) addProposal(proposals, "maxApplications", maxApps[1], maxApps[0], "Alta");
-
-    const interval = text.match(/(?:intervalo|repetir).*?(\d+\s*d[ií]as)/i);
-    if (interval) addProposal(proposals, "intervalDays", interval[1], interval[0], "Media");
-
-    const doseEvidence = text.match(/(?:dosis|aplicar)\s*[:\-]?\s*([^\n.;]{0,90}(?:kg\/ha|l\/ha|g\/hL|cc\/hL|ml\/hL|%)[^\n.;]{0,60})/i);
-    if (doseEvidence) {
-      addProposal(proposals, "doseRecommended", doseEvidence[1].trim(), doseEvidence[0], "Media");
-      const unit = (doseEvidence[1].match(/kg\/ha|l\/ha|g\/hL|cc\/hL|ml\/hL|%/i) || [])[0];
-      if (unit) {
-        addProposal(proposals, "visibleDoseUnit", unit, doseEvidence[0], "Media");
-        addProposal(proposals, "expectedAppliedUnit", unit, doseEvidence[0], "Baja");
-      }
-      const nums = extractNumbers(doseEvidence[1]);
-      if (nums.length === 1) {
-        addProposal(proposals, "doseRule", `ÚNICO ${nums[0]} ${unit || ""}`.trim(), doseEvidence[0], "Media");
-      } else if (nums.length >= 2) {
-        addProposal(proposals, "doseRule", `Mín. ${nums[0]} · Máx. ${nums[1]} ${unit || ""}`.trim(), doseEvidence[0], "Media");
-      }
-    }
-
-    const volumeEvidence = text.match(/(?:volumen\s*(?:de)?\s*caldo|agua)\s*[:\-]?\s*([^\n.;]{0,90}(?:l\/ha|L\/ha)[^\n.;]{0,60})/i);
-    if (volumeEvidence) {
-      const nums = extractNumbers(volumeEvidence[1]);
-      if (nums.length === 1) {
-        addProposal(proposals, "volumeRule", `Volumen único ${nums[0]} L/ha`, volumeEvidence[0], "Media");
-      } else if (nums.length >= 2) {
-        addProposal(proposals, "volumeRule", `Mín. ${nums[0]} L/ha · Máx. ${nums[1]} L/ha`, volumeEvidence[0], "Media");
-      }
-    }
-
-    const stage = text.match(/(?:estadio|aplicar\s+en|condiciones)\s*[:\-]?\s*([^\n.;]{4,140})/i);
-    if (stage) addProposal(proposals, "stageConditions", stage[1].trim(), stage[0], "Baja");
-
-    const active = text.match(/(?:principio(?:s)?\s+activo(?:s)?|composici[oó]n)\s*[:\-]?\s*([^\n.;]{4,180})/i);
-    if (active) addProposal(proposals, "activeIngredients", active[1].trim(), active[0], "Media");
-
-    return dedupeProposals(proposals);
-  }
-
-  function addProposal(list, field, value, evidence, confidence) {
-    if (!value) return;
-    list.push({ field, value: String(value).trim(), evidence: String(evidence || "").trim().slice(0, 240), confidence });
-  }
-
-  function dedupeProposals(proposals) {
-    const seen = new Set();
-    return proposals.filter((proposal) => {
-      const key = `${proposal.field}|${proposal.value}`;
-      if (seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-  }
-
-  // ---------- Validaciones técnicas ----------
-  function validateDoseAgainstRule(product, dose, unit) {
-    const rule = normalizeDoseRule(product.doseRule);
-    if (!rule || rule.mode === "text") return { warning: "La ficha no dispone de regla numérica automática de dosis." };
-
-    const expected = normalizeUnit(product.expectedAppliedUnit || rule.unit || "");
-    const incoming = normalizeUnit(unit || "");
-    if (expected && incoming && expected !== incoming) {
-      return { warning: "No se compara automáticamente la dosis porque la unidad no coincide con la unidad esperada." };
-    }
-
-    if (rule.mode === "unique") {
-      const unique = parseLocaleNumber(rule.unique);
-      if (unique !== null && !approxEqual(dose, unique)) {
-        return { error: `La dosis aplicada debe ser ${rule.unique} ${unit}.` };
-      }
-    }
-
-    if (rule.mode === "range" || rule.mode === "range_limit") {
-      const min = parseLocaleNumber(rule.min);
-      const max = parseLocaleNumber(rule.max);
-      if (min !== null && dose < min) return { error: `La dosis aplicada queda por debajo del mínimo (${rule.min}).` };
-      if (max !== null && dose > max) return { error: `La dosis aplicada supera el máximo (${rule.max}).` };
-    }
-
-    return {};
-  }
-
-  function validateVolumeAgainstRule(product, liters) {
-    if (product.volumeImportedUnknown) return { warning: "La ficha conserva volumen 'No consta'; no hay validación automática." };
-    const rule = normalizeVolumeRule(product.volumeRule);
-    if (!rule) return { warning: "La ficha no dispone de regla de volumen automática." };
-
-    if (rule.mode === "unique") {
-      const unique = parseLocaleNumber(rule.unique);
-      if (unique !== null && !approxEqual(liters, unique)) {
-        return { error: `El volumen de caldo debe ser ${rule.unique} L/ha.` };
-      }
-    }
-
-    if (rule.mode === "range") {
-      const min = parseLocaleNumber(rule.min);
-      const max = parseLocaleNumber(rule.max);
-      if (min !== null && liters < min) return { error: `El volumen aplicado queda por debajo del mínimo (${rule.min} L/ha).` };
-      if (max !== null && liters > max) return { error: `El volumen aplicado supera el máximo (${rule.max} L/ha).` };
-    }
-
-    return {};
-  }
-
-  // ---------- Cuaderno / visualización ----------
-  function displayTreatmentRow(row) {
-    return {
-      id: row.id,
-      groupNo: valueOrPending(row.groupNo),
-      date: row.date,
-      dateFormatted: formatDate(row.date),
-      productName: valueOrPending(row.productName),
-      regNumber: valueOrPending(row.regNumber),
-      lot: valueOrPending(row.lot),
-      doseRecommended: valueOrPending(row.doseRecommended),
-      appliedDose: valueOrPending(row.appliedDose || formatAppliedDose(row.appliedDoseValue, row.appliedUnit)),
-      volumeRule: valueOrPending(row.volumeRule),
-      litersHa: valueOrPending(row.litersHa),
-      cropUse: valueOrPending(row.cropUse),
-      target: valueOrPending(row.target),
-      ps: valueOrPending(row.ps),
-      campaignCount: campaignCountLabel(row),
-      activeIngredients: valueOrPending(row.activeIngredients),
-      mezcla: valueOrPending(row.mezcla)
-    };
-  }
-
-  function buildTableHtml() {
-    let lastGroup = null;
-    return `
-      <table class="cuaderno-table" aria-label="Cuaderno de tratamientos">
-        <thead>
-          <tr>
-            <th>N.º</th>
-            <th>Fecha</th>
-            <th>Nombre<br>del producto</th>
-            <th>N.º de<br>registro</th>
-            <th>Lote</th>
-            <th>Dosis<br>recomendada</th>
-            <th>Dosis<br>aplicada</th>
-            <th>Volumen<br>caldo</th>
-            <th>Litros/ha<br>aplicados</th>
-            <th>Cultivo</th>
-            <th>Plaga /<br>patógeno</th>
-            <th>P.S.</th>
-            <th>Tratamientos<br>campaña</th>
-            <th>Principios<br>activos</th>
-            <th>MEZCLA</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${state.treatments.map((row) => {
-            const display = displayTreatmentRow(row);
-            const groupStart = lastGroup !== display.groupNo;
-            lastGroup = display.groupNo;
-            return `
-              <tr class="${groupStart ? "group-start" : ""}">
-                ${tableCell(display.groupNo, "tech")}
-                ${tableCell(display.dateFormatted)}
-                ${tableCell(display.productName)}
-                ${tableCell(display.regNumber)}
-                ${tableCell(display.lot)}
-                ${tableCell(display.doseRecommended, "tech")}
-                ${tableCell(display.appliedDose)}
-                ${tableCell(display.volumeRule, "tech")}
-                ${tableCell(display.litersHa)}
-                ${tableCell(display.cropUse)}
-                ${tableCell(display.target)}
-                ${tableCell(display.ps)}
-                ${tableCell(display.campaignCount, "tech")}
-                ${tableCell(display.activeIngredients)}
-                ${tableCell(display.mezcla, "tech")}
-              </tr>
-            `;
-          }).join("")}
-        </tbody>
-      </table>
-    `;
-  }
-
-  function tableCell(value, extraClass = "") {
-    const pending = String(value || "").toLowerCase().includes("a verificar");
-    return `<td class="${extraClass} ${pending ? "pending" : ""}">${escapeHtml(valueOrPending(value))}</td>`;
-  }
-
-  function rowHasPending(display) {
-    return Object.values(display).some((value) => String(value || "").toLowerCase().includes("a verificar"));
-  }
-
-  function campaignCountLabel(row) {
-    const relevant = state.treatments
-      .filter((item) => item.productId && item.productId === row.productId)
-      .sort(compareTreatmentOrder);
-    const idx = relevant.findIndex((item) => item.id === row.id);
-    const count = idx >= 0 ? idx + 1 : 1;
-    const product = productById(row.productId);
-    const max = parseMaxApplications(product?.maxApplications);
-    return max !== null ? `${count}/${max}` : "NO CONSTA";
-  }
-
-  function countTreatmentsByProduct() {
-    const map = new Map();
-    for (const row of state.treatments) {
-      if (!row.productId) continue;
-      map.set(row.productId, (map.get(row.productId) || 0) + 1);
-    }
-    return map;
-  }
-
-  // ---------- Exportación ----------
-  function exportCsv() {
-    const rows = exportRows();
-    const header = rows.shift();
-    const csv = [header, ...rows].map((row) => row.map(csvEscape).join(";")).join("\n");
-    downloadBlob(new Blob(["\ufeff", csv], { type: "text/csv;charset=utf-8" }), `cuaderno_tratamientos_${state.settings?.campaign || "2026"}_v2_0.csv`);
-    toast("CSV generado.");
-  }
-
-  function exportXls() {
-    const rows = exportRows();
-    const html = `
-      <html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:x="urn:schemas-microsoft-com:office:excel">
-      <head><meta charset="utf-8"></head>
-      <body>
-        <table border="1">
-          ${rows.map((row, i) => `<tr>${row.map((cell) => `<${i === 0 ? "th" : "td"}>${escapeHtml(cell)}</${i === 0 ? "th" : "td"}>`).join("")}</tr>`).join("")}
-        </table>
-      </body></html>
-    `;
-    downloadBlob(new Blob(["\ufeff", html], { type: "application/vnd.ms-excel;charset=utf-8" }), `cuaderno_tratamientos_${state.settings?.campaign || "2026"}_v2_0.xls`);
-    toast("Archivo Excel generado.");
-  }
-
-  function exportRows() {
-    const header = [
-      "N.º","Fecha","Nombre del producto","N.º de registro","Lote",
-      "Dosis recomendada","Dosis aplicada","Volumen caldo","Litros/ha aplicados",
-      "Cultivo","Plaga / patógeno","P.S.","Tratamientos campaña","Principios activos","MEZCLA"
-    ];
-    const rows = state.treatments.map((row) => {
-      const d = displayTreatmentRow(row);
-      return [
-        d.groupNo, d.dateFormatted, d.productName, d.regNumber, d.lot,
-        d.doseRecommended, d.appliedDose, d.volumeRule, d.litersHa,
-        d.cropUse, d.target, d.ps, d.campaignCount, d.activeIngredients, d.mezcla
-      ];
-    });
-    return [header, ...rows];
-  }
-
-  function printOfficialPdf() {
-    const body = `
-      <h1>CUADERNO DE TRATAMIENTOS. CAMPAÑA ${escapeHtml(state.settings?.campaign || "2026")}</h1>
-      <p class="applicator"><strong>Nombre del aplicador:</strong> ${escapeHtml(state.settings?.applicator || "No configurado")}</p>
-      ${buildPrintTableHtml()}
-    `;
-    openPrintWindow("PDF oficial", body, "official");
-  }
-
-  function printCompactPdf() {
-    const cards = state.treatments.map((row) => {
-      const d = displayTreatmentRow(row);
-      return `
-        <section class="compact-card">
-          <h2>${escapeHtml(d.productName)} · ${escapeHtml(d.dateFormatted)}</h2>
-          <p><strong>N.º:</strong> ${escapeHtml(d.groupNo)} · <strong>Registro:</strong> ${escapeHtml(d.regNumber)} · <strong>Lote:</strong> ${escapeHtml(d.lot)}</p>
-          <p><strong>Dosis:</strong> ${escapeHtml(d.appliedDose)} · <strong>Volumen aplicado:</strong> ${escapeHtml(d.litersHa)} L/ha</p>
-          <p><strong>Objetivo:</strong> ${escapeHtml(d.target)} · <strong>P.S.:</strong> ${escapeHtml(d.ps)} · <strong>Campaña:</strong> ${escapeHtml(d.campaignCount)}</p>
+  function renderInicio(){
+    const last=[...state.interventions].sort((a,b)=>b.date.localeCompare(a.date))[0];
+    const alerts=alertList();
+    refs.views.inicio.innerHTML=`
+      <div class="stack">
+        <section class="summary-grid">
+          <article class="summary-tile"><span>Fechas registradas</span><strong>${state.interventions.length}</strong></article>
+          <article class="summary-tile"><span>Aplicaciones</span><strong>${apps().length}</strong></article>
+          <article class="summary-tile"><span>Productos verificados</span><strong>${state.products.filter(p=>p.status==='verified'&&!p.archived).length}</strong></article>
+          <article class="summary-tile"><span>Alertas activas</span><strong>${alerts.length}</strong></article>
         </section>
-      `;
-    }).join("");
-    const body = `
-      <h1>CUADERNO DE TRATAMIENTOS · RESUMEN COMPACTO</h1>
-      <p><strong>Campaña:</strong> ${escapeHtml(state.settings?.campaign || "2026")} · <strong>Aplicador:</strong> ${escapeHtml(state.settings?.applicator || "No configurado")}</p>
-      ${cards || "<p>Sin tratamientos registrados.</p>"}
-    `;
-    openPrintWindow("PDF compacto", body, "compact");
+        <section class="card">
+          <div class="section-heading"><div><h2>Resumen de campaña</h2><p class="muted">App neutra: sin tratamientos reales incrustados.</p></div></div>
+          <div class="info-grid"><div class="soft-box"><span class="meta">Última fecha</span><strong>${last?fmtDate(last.date):'Sin registros'}</strong></div><div class="soft-box"><span class="meta">Borradores</span><strong>${state.drafts.length}</strong></div></div>
+          <div class="action-row top-gap"><button class="primary-button" data-open-view="nuevo" type="button">Nuevo tratamiento</button><button class="secondary-button" data-open-view="cuaderno" type="button">Ver cuaderno</button></div>
+        </section>
+        ${renderDraftPreview()}
+        ${renderAlertsPreview(alerts)}
+      </div>`;
+    linkViews(refs.views.inicio);
+    bindAlertCards(refs.views.inicio);
+    $$('[data-resume-draft]',refs.views.inicio).forEach(b=>b.addEventListener('click',()=>{ui.activeDraftId=b.dataset.resumeDraft; setView('nuevo');}));
+    $$('[data-discard-draft]',refs.views.inicio).forEach(b=>b.addEventListener('click',()=>discardDraft(b.dataset.discardDraft)));
+  }
+  function renderDraftPreview(){
+    if(!state.drafts.length) return `<section class="card"><h2>Continuidad</h2><p class="muted">No hay borradores pendientes.</p></section>`;
+    return `<section class="card"><div class="section-heading"><div><h2>Continuidad con borradores</h2><p class="muted">Retoma entradas autoguardadas.</p></div></div><div class="stack">${state.drafts.slice(0,2).map(d=>`<article class="draft-card"><div class="section-heading"><div><h3>${esc(d.title)}</h3><p class="muted">${d.groups.length} fecha(s) · ${draftAppCount(d)} producto(s)</p></div>${badge('Borrador','info')}</div><div class="action-row"><button class="primary-button" data-resume-draft="${d.id}" type="button">Retomar</button><button class="danger-outline-button" data-discard-draft="${d.id}" type="button">Descartar</button></div></article>`).join('')}</div></section>`;
+  }
+  function renderAlertsPreview(alerts){
+    if(!alerts.length) return `<section class="card"><h2>Alertas</h2><p class="muted">No hay alertas activas.</p></section>`;
+    return `<section class="card"><div class="section-heading"><div><h2>Alertas prioritarias</h2><p class="muted">Las alertas técnicas no se resuelven si la causa persiste.</p></div><button class="text-button" data-open-view="alertas" type="button">Ver todas</button></div><div class="stack">${alerts.slice(0,3).map(renderAlertCard).join('')}</div></section>`;
   }
 
-  function buildPrintTableHtml() {
-    const rows = exportRows();
-    return `
-      <table>
-        <thead><tr>${rows[0].map((cell) => `<th>${escapeHtml(cell)}</th>`).join("")}</tr></thead>
-        <tbody>
-          ${rows.slice(1).map((row) => `<tr>${row.map((cell, index) => {
-            const tech = [0,5,7,12,14].includes(index);
-            const pending = String(cell).toLowerCase().includes("a verificar");
-            return `<td class="${tech ? "tech" : ""} ${pending ? "pending" : ""}">${escapeHtml(cell)}</td>`;
-          }).join("")}</tr>`).join("")}
-        </tbody>
-      </table>
-    `;
+  function renderNuevo(){
+    const d=draft();
+    refs.views.nuevo.innerHTML=`<div class="stack"><section class="card"><div class="section-heading"><div><h2>Nuevo tratamiento</h2><p class="muted">Proceso guiado, secuencial y con autoguardado silencioso.</p></div>${d?badge('Borrador activo','info'):badge('Entrada nueva','success')}</div>${d?renderDraftEditor(d):renderDraftStart()}</section>${renderDraftList()}</div>`;
+    bindNuevo();
+  }
+  function renderDraftStart(){ return `<form id="startDraft" class="stack"><div class="form-grid"><label class="field"><span>Fecha con calendario</span><input class="field-input" name="calendar" type="date" value="${todayIso()}" /></label><label class="field"><span>O escritura manual dd/mm/aaaa</span><input class="field-input" name="manual" type="text" placeholder="${fmtDate(todayIso())}" inputmode="numeric" /></label></div><p class="helper">La fecha futura queda bloqueada inicialmente y exige doble verificación.</p><div class="action-row"><button class="primary-button" type="submit">Comenzar registro</button></div></form>`; }
+  function renderDraftEditor(d){
+    const g=d.groups.find(x=>x.id===d.currentGroupId)||d.groups[d.groups.length-1];
+    if(!g) return renderDraftStart();
+    return `<div class="stack"><div class="soft-box"><span class="meta">Fecha activa</span><strong>${fmtDate(g.date)}</strong><p class="muted">Productos en esta fecha: ${g.applications.length}</p></div>${renderDraftApps(g)}${renderAppForm(g)}<div class="action-row divided-actions"><button class="secondary-button" data-add-date type="button">Añadir otra fecha</button><button class="primary-button" data-finalize-draft type="button">Finalizar y registrar</button></div><div class="action-row"><button class="text-button" data-save-draft type="button">Cerrar y dejar en borradores</button><button class="danger-outline-button" data-discard-draft="${d.id}" type="button">Descartar borrador</button></div></div>`;
+  }
+  function renderDraftApps(g){
+    if(!g.applications.length) return `<div class="empty-state">Aún no hay productos añadidos para ${fmtDate(g.date)}.</div>`;
+    return `<div class="stack compact-stack">${g.applications.map(a=>{const p=product(a.productId); const issues=validate(a,{group:g,date:g.date,futureConfirmed:g.futureConfirmed}); return `<article class="record-card"><div class="section-heading"><div><h3>${esc(p?.name||a.productNameSnapshot||'Producto')}</h3><p class="muted">Lote ${esc(a.lot||'—')} · ${esc(a.crop||'—')} · ${esc(a.target||'—')}</p></div>${statusBadge(p)}</div><div class="metric-grid"><div class="mini-metric"><span>Dosis</span><strong>${esc(a.doseApplied||'—')} ${esc(a.doseUnit||'')}</strong></div><div class="mini-metric"><span>L/ha</span><strong>${esc(a.lha||'—')}</strong></div></div>${issues.length?`<div class="warning-box">${issues.map(i=>`<p>${esc(i.text)}</p>`).join('')}</div>`:''}<div class="action-row"><button class="text-button" data-remove-draft-app="${a.id}" type="button">Quitar</button></div></article>`;}).join('')}</div>`;
+  }
+  function renderAppForm(g){
+    const productOptions=[...new Map([...recentProducts(),...state.products.filter(p=>!p.archived)].map(p=>[p.id,p])).values()];
+    return `<form id="draftAppForm" class="panel nested-panel stack"><div class="section-heading"><div><h3>Añadir producto a ${fmtDate(g.date)}</h3><p class="muted">Productos recientes primero; también admite alta provisional.</p></div></div><label class="field"><span>Producto</span><input class="field-input" id="draftProductName" name="productName" list="prodlist" placeholder="Buscar o escribir nombre comercial" autocomplete="off" required /><datalist id="prodlist">${productOptions.map(p=>`<option value="${esc(p.name)}"></option>`).join('')}</datalist></label><div id="selectedProductStatus" class="helper">Al seleccionar un producto se muestran sus opciones técnicas.</div><div class="form-grid"><label class="field"><span>Lote</span><input class="field-input" name="lot" required /></label><label class="field"><span>Cultivo / uso</span><select class="field-select" id="draftCrop" name="crop"><option value="${esc(state.settings.defaultCrop)}">${esc(state.settings.defaultCrop)}</option></select></label></div><div class="form-grid"><label class="field"><span>Plaga / objetivo</span><select class="field-select" id="draftTarget" name="target"><option value="">Selecciona producto</option></select></label><label class="field"><span>Dosis aplicada</span><input class="field-input" name="doseApplied" type="number" step="0.001" min="0" required /></label></div><div class="form-grid"><label class="field"><span>Unidad dosis</span><select class="field-select" id="draftDoseUnit" name="doseUnit"><option value="">Selecciona producto</option>${units.map(u=>`<option value="${u}">${u}</option>`).join('')}</select></label><label class="field"><span>Litros/ha aplicados</span><input class="field-input" name="lha" type="number" step="0.001" min="0" value="${esc(state.settings.defaultLha)}" required /></label></div><label class="field"><span>Observaciones opcionales</span><textarea class="field-textarea" name="observations"></textarea></label><label class="field"><span>Incidencia opcional</span><textarea class="field-textarea" name="incidence"></textarea></label><div id="technicalHint" class="info-box">Selecciona un producto para ver dosis, volumen, P.S. y máximo de campaña.</div><div id="appValidation"></div><div class="action-row"><button class="primary-button" type="submit">Añadir producto</button></div></form>`;
+  }
+  function renderDraftList(){
+    if(!state.drafts.length) return '';
+    return `<section class="card"><div class="section-heading"><div><h2>Borradores guardados</h2><p class="muted">Múltiples borradores disponibles.</p></div></div><div class="stack">${state.drafts.map(d=>`<article class="draft-card ${d.id===ui.activeDraftId?'selected-card':''}"><div class="section-heading"><div><h3>${esc(d.title)}</h3><p class="muted">${d.groups.length} fecha(s) · ${draftAppCount(d)} aplicación(es)</p></div>${d.id===ui.activeDraftId?badge('Activo','success'):badge('Guardado','info')}</div><div class="action-row"><button class="secondary-button" data-resume-draft="${d.id}" type="button">Retomar</button><button class="danger-outline-button" data-discard-draft="${d.id}" type="button">Descartar</button></div></article>`).join('')}</div></section>`;
+  }
+  function draftAppCount(d){ return d.groups.reduce((s,g)=>s+g.applications.length,0); }
+  function recentProducts(){ const ids=[]; [...apps()].reverse().forEach(x=>{if(x.app.productId&&!ids.includes(x.app.productId)) ids.push(x.app.productId);}); return ids.map(product).filter(Boolean); }
+
+  function bindNuevo(){
+    $('#startDraft',refs.views.nuevo)?.addEventListener('submit',e=>{e.preventDefault(); const f=new FormData(e.currentTarget); const iso=parseManualDate(f.get('manual')) || String(f.get('calendar')||''); if(!dateObj(iso)) return toast('La fecha no es válida.','danger'); const done=()=>createDraft(iso,isFuture(iso)); isFuture(iso)?futureDoubleConfirm(iso,done):done();});
+    $('#draftProductName',refs.views.nuevo)?.addEventListener('input',assistProduct);
+    $('#draftProductName',refs.views.nuevo)?.addEventListener('change',assistProduct);
+    $('#draftCrop',refs.views.nuevo)?.addEventListener('change',updateTargetOptions);
+    $('#draftAppForm',refs.views.nuevo)?.addEventListener('submit',e=>{e.preventDefault(); addDraftApp(e.currentTarget);});
+    $$('[data-remove-draft-app]',refs.views.nuevo).forEach(b=>b.addEventListener('click',()=>removeDraftApp(b.dataset.removeDraftApp)));
+    $('[data-add-date]',refs.views.nuevo)?.addEventListener('click',addAnotherDate);
+    $('[data-finalize-draft]',refs.views.nuevo)?.addEventListener('click',finalizeDraft);
+    $('[data-save-draft]',refs.views.nuevo)?.addEventListener('click',()=>{ui.activeDraftId=null; save(); renderAll(); toast('Borrador guardado.');});
+    $$('[data-resume-draft]',refs.views.nuevo).forEach(b=>b.addEventListener('click',()=>{ui.activeDraftId=b.dataset.resumeDraft; renderAll();}));
+    $$('[data-discard-draft]',refs.views.nuevo).forEach(b=>b.addEventListener('click',()=>discardDraft(b.dataset.discardDraft)));
+    assistProduct();
+  }
+  function createDraft(iso,futureConfirmed){ const d={id:uid('draft'),title:`Borrador ${fmtDate(iso)}`,groups:[{id:uid('grupo'),date:iso,futureConfirmed,applications:[]}],currentGroupId:'',createdAt:nowIso(),updatedAt:nowIso()}; d.currentGroupId=d.groups[0].id; mutate(s=>{s.drafts.unshift(d); ui.activeDraftId=d.id;},'Registro iniciado.'); }
+  function assistProduct(){ const input=$('#draftProductName',refs.views.nuevo), status=$('#selectedProductStatus',refs.views.nuevo), crop=$('#draftCrop',refs.views.nuevo), target=$('#draftTarget',refs.views.nuevo), unit=$('#draftDoseUnit',refs.views.nuevo), hint=$('#technicalHint',refs.views.nuevo); if(!input||!status||!crop||!target||!unit||!hint) return; const p=byName(input.value); if(!p){ status.innerHTML=`${badge('Alta provisional','warning')} Se creará ficha A verificar al añadir.`; crop.innerHTML=`<option value="${esc(state.settings.defaultCrop)}">${esc(state.settings.defaultCrop)}</option>`; target.innerHTML='<option value="">Escribe el objetivo tras crear la ficha</option>'; hint.textContent='Producto provisional: validación técnica completa pendiente.'; return; } status.innerHTML=`${statusBadge(p)} ${esc(p.registration)}`; const crops=[...new Set(p.uses.map(u=>u.crop).filter(Boolean))]; crop.innerHTML=(crops.length?crops:[state.settings.defaultCrop]).map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join(''); updateTargetOptions(); const u=p.uses[0]; if(u?.doseRule?.unit) unit.value=u.doseRule.unit; hint.innerHTML=techHint(u); }
+  function updateTargetOptions(){ const p=byName($('#draftProductName',refs.views.nuevo)?.value); const crop=$('#draftCrop',refs.views.nuevo), target=$('#draftTarget',refs.views.nuevo), unit=$('#draftDoseUnit',refs.views.nuevo), hint=$('#technicalHint',refs.views.nuevo); if(!p||!crop||!target) return; const uses=p.uses.filter(u=>norm(u.crop)===norm(crop.value)); const list=uses.length?uses:p.uses; target.innerHTML=list.map(u=>`<option value="${esc(u.target||'')}">${esc(u.target||'A verificar')}</option>`).join(''); const u=list[0]||p.uses[0]; if(unit&&u?.doseRule?.unit) unit.value=u.doseRule.unit; if(hint) hint.innerHTML=techHint(u); }
+  function techHint(u){ return !u?'Ficha técnica no disponible.':`<strong>Dosis:</strong> ${esc(u.doseDisplay)} · <strong>Volumen:</strong> ${esc(u.volumeDisplay)} · <strong>P.S.:</strong> ${esc(u.ps)} · <strong>Máx. campaña:</strong> ${esc(u.maxApplications??'A verificar')}`; }
+  function addDraftApp(form){ const d=draft(); const g=d?.groups.find(x=>x.id===d.currentGroupId); if(!d||!g) return; const fd=new FormData(form); const name=String(fd.get('productName')||'').trim(); if(!name) return toast('Indica un producto.','danger'); let p=byName(name); if(!p) p=normalizeProduct({id:uid('prod'),name,uses:[blankUse()]}); const a=normalizeApp({productId:p.id,productNameSnapshot:p.name,lot:fd.get('lot'),crop:fd.get('crop'),target:fd.get('target'),doseApplied:fd.get('doseApplied'),doseUnit:fd.get('doseUnit'),lha:fd.get('lha'),observations:fd.get('observations'),incidence:fd.get('incidence')}); const issues=validate(a,{group:g,date:g.date,futureConfirmed:g.futureConfirmed}); const bad=blockers(issues); if(bad.length){ $('#appValidation',refs.views.nuevo).innerHTML=`<div class="danger-box">${bad.map(i=>`<p>${esc(i.text)}</p>`).join('')}</div>`; return toast('No se puede añadir: corrige los datos marcados.','danger'); } mutate(s=>{if(!product(p.id)) s.products.push(p); const dd=s.drafts.find(x=>x.id===d.id); const gg=dd.groups.find(x=>x.id===g.id); gg.applications.push(a); dd.updatedAt=nowIso();},issues.length?'Producto añadido con avisos pendientes.':'Producto añadido.'); }
+  function removeDraftApp(id){ const d=draft(); if(!d) return; mutate(s=>{const dd=s.drafts.find(x=>x.id===d.id); dd.groups.forEach(g=>g.applications=g.applications.filter(a=>a.id!==id)); dd.updatedAt=nowIso();},'Producto retirado del borrador.'); }
+  function addAnotherDate(){ const d=draft(); if(!d) return; modal(`<div class="modal-head"><h2>Añadir otra fecha</h2><button class="icon-button" data-close-modal type="button">×</button></div><form id="addDateForm" class="stack"><label class="field"><span>Fecha con calendario</span><input class="field-input" name="calendar" type="date" value="${todayIso()}" /></label><label class="field"><span>O escritura manual dd/mm/aaaa</span><input class="field-input" name="manual" type="text" placeholder="${fmtDate(todayIso())}" /></label><div class="action-row"><button class="secondary-button" data-close-modal type="button">Cancelar</button><button class="primary-button" type="submit">Añadir fecha</button></div></form>`); $('#addDateForm',refs.modal)?.addEventListener('submit',e=>{e.preventDefault(); const fd=new FormData(e.currentTarget); const iso=parseManualDate(fd.get('manual'))||String(fd.get('calendar')||''); if(!dateObj(iso)) return toast('La fecha no es válida.','danger'); const done=()=>{closeModal(); mutate(s=>{const dd=s.drafts.find(x=>x.id===d.id); const existing=dd.groups.find(g=>g.date===iso); if(existing) dd.currentGroupId=existing.id; else {const g={id:uid('grupo'),date:iso,futureConfirmed:isFuture(iso),applications:[]}; dd.groups.push(g); dd.currentGroupId=g.id;} dd.updatedAt=nowIso();},'Fecha añadida al borrador.');}; isFuture(iso)?(closeModal(),futureDoubleConfirm(iso,done)):done(); }); }
+  function discardDraft(id){ confirmBox('Descartar borrador','Esta acción elimina el borrador. Requiere confirmación expresa.',()=>confirmBox('Segunda confirmación','Confirma que deseas borrar definitivamente este borrador.',()=>mutate(s=>{s.drafts=s.drafts.filter(d=>d.id!==id); if(ui.activeDraftId===id) ui.activeDraftId=null;},'Borrador descartado.'),'Descartar definitivamente',true),'Continuar',true); }
+  function finalizeDraft(){ const d=draft(); if(!d||!draftAppCount(d)) return toast('No hay aplicaciones para registrar.','danger'); const bad=[]; d.groups.forEach(g=>g.applications.forEach(a=>blockers(validate(a,{group:g,date:g.date,futureConfirmed:g.futureConfirmed})).forEach(i=>bad.push(`${fmtDate(g.date)} · ${i.text}`)))); if(bad.length) return confirmBox('Registro bloqueado',bad.slice(0,5).join(' | '),()=>{},'Entendido',true); const solo=d.groups.filter(g=>g.applications.length>1 && g.applications.some(a=>product(a.productId)?.mix==='SOLO')); if(solo.length) return confirmBox('Producto marcado SOLO',`En ${solo.map(g=>fmtDate(g.date)).join(', ')} hay un producto SOLO junto con otros. Confirma que se aplicaron en cubas distintas.`,()=>commitDraft(d),'Confirmar cubas distintas',true); commitDraft(d); }
+  function commitDraft(d){ mutate(s=>{d.groups.forEach(g=>{let i=s.interventions.find(x=>x.date===g.date); if(!i){i=normalizeIntervention({date:g.date}); s.interventions.push(i);} g.applications.forEach(a=>{if(!i.applications.some(x=>x.productId===a.productId)) i.applications.push(normalizeApp(a));}); i.updatedAt=nowIso();}); s.interventions.sort((a,b)=>a.date.localeCompare(b.date)); s.drafts=s.drafts.filter(x=>x.id!==d.id); ui.activeDraftId=null;},'Tratamientos registrados en el cuaderno.'); setView('cuaderno'); }
+
+  const headers=['N.º','Fecha','Nombre del producto','N.º de registro','Lote','Dosis recomendada','Dosis aplicada','Volumen caldo','Litros/ha aplicados','Cultivo','Plaga / patógeno','P.S.','Tratamientos campaña','Principios activos','MEZCLA'];
+  function officialRows(list=state.interventions){ const nums=interventionNumbers(); const rows=[]; [...list].sort((a,b)=>a.date.localeCompare(b.date)).forEach(i=>i.applications.forEach(a=>{const p=product(a.productId), u=productUse(p,a); rows.push([nums.get(i.id),fmtDate(i.date),p?.name||a.productNameSnapshot||'—',p?.registration||'A verificar',a.lot||'—',u?.doseDisplay||'A verificar',`${a.doseApplied||'—'} ${a.doseUnit||''}`.trim(),u?.volumeDisplay||'A verificar',`${a.lha||'—'} L/ha`,a.crop||'—',a.target||'—',u?.ps||'A verificar',u?.maxApplications??'A verificar',p?.activeIngredients||'A verificar',p?.mix||'A verificar']);})); return rows; }
+  function filteredInterventions(){ return state.interventions.map(i=>({...i,applications:i.applications.filter(a=>searchMatch(i.date,fmtDate(i.date),product(a.productId)?.name,a.productNameSnapshot,a.lot,a.crop,a.target,a.observations,a.incidence))})).filter(i=>i.applications.length).sort((a,b)=>a.date.localeCompare(b.date)); }
+  function renderCuaderno(){
+    const list=filteredInterventions();
+    refs.views.cuaderno.innerHTML=`<div class="stack"><section class="card"><div class="section-heading"><div><h2>Cuaderno</h2><p class="muted">N.º agrupado por fecha/intervención; orden cronológico automático.</p></div></div><div class="segmented-control"><button data-mode="cards" class="${ui.cuadernoMode==='cards'?'active':''}" type="button">Trabajo</button><button data-mode="table" class="${ui.cuadernoMode==='table'?'active':''}" type="button">15 columnas</button><button data-mode="pdf" class="${ui.cuadernoMode==='pdf'?'active':''}" type="button">Vista PDF</button></div><div class="action-row top-gap"><button class="secondary-button" data-export="csv" type="button">CSV</button><button class="secondary-button" data-export="excel" type="button">Excel</button><button class="secondary-button" data-export="pdf-official" type="button">PDF oficial</button><button class="secondary-button" data-export="pdf-compact" type="button">PDF compacto</button></div></section>${list.length?renderCuadernoMode(list):'<section class="card empty-state">No hay registros que mostrar.</section>'}</div>`;
+    $$('[data-mode]',refs.views.cuaderno).forEach(b=>b.addEventListener('click',()=>{ui.cuadernoMode=b.dataset.mode; renderCuaderno();}));
+    $$('[data-export]',refs.views.cuaderno).forEach(b=>b.addEventListener('click',()=>exportNotebook(b.dataset.export)));
+    $$('[data-edit-intervention]',refs.views.cuaderno).forEach(b=>b.addEventListener('click',()=>openInterventionEditor(b.dataset.editIntervention)));
+  }
+  function renderCuadernoMode(list){ return ui.cuadernoMode==='table'?renderTable(list):ui.cuadernoMode==='pdf'?renderPdfPreview(list):renderCards(list); }
+  function renderCards(list){ const nums=interventionNumbers(); return list.map(i=>`<section class="card"><div class="section-heading"><div><h2>N.º ${nums.get(i.id)} · ${fmtDate(i.date)}</h2><p class="muted">${i.applications.length} aplicación(es)</p></div><button class="text-button" data-edit-intervention="${i.id}" type="button">Editar</button></div><div class="stack">${i.applications.map(a=>renderSavedApp(i,a)).join('')}</div></section>`).join(''); }
+  function renderSavedApp(i,a){ const p=product(a.productId), u=productUse(p,a), issues=validate(a,{date:i.date,futureConfirmed:true}); return `<article class="record-card ${issues.length?'has-alert':''}"><div class="section-heading"><div><h3>${esc(p?.name||a.productNameSnapshot||'Producto')}</h3><p class="muted">Lote ${esc(a.lot||'—')} · ${esc(a.crop||'—')} · ${esc(a.target||'—')}</p></div>${statusBadge(p)}</div><div class="info-grid"><div class="mini-metric"><span>Dosis recomendada</span><strong>${esc(u?.doseDisplay||'A verificar')}</strong></div><div class="mini-metric"><span>Dosis aplicada</span><strong>${esc(a.doseApplied||'—')} ${esc(a.doseUnit||'')}</strong></div><div class="mini-metric"><span>Volumen caldo</span><strong>${esc(u?.volumeDisplay||'A verificar')}</strong></div><div class="mini-metric"><span>L/ha aplicados</span><strong>${esc(a.lha||'—')}</strong></div></div><div class="meta-row top-gap">${badge(`P.S.: ${u?.ps||'A verificar'}`,u?.ps&&u.ps!=='A verificar'?'info':'warning')}${badge(`MEZCLA: ${p?.mix||'A verificar'}`,p?.mix==='SOLO'?'danger':'neutral')}</div>${a.incidence?`<div class="danger-box top-gap"><strong>Incidencia:</strong> ${esc(a.incidence)}</div>`:''}${issues.length?`<div class="warning-box top-gap">${issues.map(x=>`<p>${esc(x.text)}</p>`).join('')}</div>`:''}${a.observations?`<p class="small-note top-gap"><strong>Observaciones:</strong> ${esc(a.observations)}</p>`:''}</article>`; }
+  function renderTable(list){ const rows=officialRows(list); return `<section class="card"><div class="table-scroll"><table class="official-table"><thead><tr>${headers.map(h=>`<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows.map(r=>`<tr>${r.map(c=>`<td>${esc(c)}</td>`).join('')}</tr>`).join('')}</tbody></table></div></section>`; }
+  function renderPdfPreview(list){ const rows=officialRows(list); return `<section class="document-card pdf-preview"><div class="pdf-sheet"><h2>Cuaderno de tratamientos · Campaña 2026</h2><p>Vista previa documental completa de 15 columnas.</p><div class="table-scroll"><table class="official-table pdf-table"><thead><tr>${headers.map(h=>`<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows.map(r=>`<tr>${r.map(c=>`<td>${esc(c)}</td>`).join('')}</tr>`).join('')}</tbody></table></div></div></section>`; }
+  function openInterventionEditor(id){ const i=state.interventions.find(x=>x.id===id); if(!i) return; modal(`<div class="modal-head"><h2>Editar intervención ${fmtDate(i.date)}</h2><button class="icon-button" data-close-modal type="button">×</button></div><div class="stack">${i.applications.map(a=>{const p=product(a.productId); return `<form class="panel nested-panel stack edit-saved-app" data-app="${a.id}"><h3>${esc(p?.name||a.productNameSnapshot||'Producto')}</h3><div class="form-grid"><label class="field"><span>Lote</span><input class="field-input" name="lot" value="${esc(a.lot)}" required /></label><label class="field"><span>Litros/ha</span><input class="field-input" name="lha" type="number" step="0.001" value="${esc(a.lha)}" required /></label></div><div class="form-grid"><label class="field"><span>Dosis aplicada</span><input class="field-input" name="doseApplied" type="number" step="0.001" value="${esc(a.doseApplied)}" required /></label><label class="field"><span>Unidad</span><select class="field-select" name="doseUnit">${units.map(u=>`<option value="${u}" ${u===a.doseUnit?'selected':''}>${u}</option>`).join('')}</select></label></div><label class="field"><span>Observaciones</span><textarea class="field-textarea" name="observations">${esc(a.observations)}</textarea></label><label class="field"><span>Incidencia</span><textarea class="field-textarea" name="incidence">${esc(a.incidence)}</textarea></label><div class="action-row"><button class="primary-button" type="submit">Guardar cambios</button><button class="danger-outline-button" data-delete-saved-app="${a.id}" type="button">Eliminar</button></div></form>`;}).join('')}</div>`,'wide-modal'); $$('.edit-saved-app',refs.modal).forEach(f=>f.addEventListener('submit',e=>{e.preventDefault(); updateSavedApp(id,f.dataset.app,new FormData(f));})); $$('[data-delete-saved-app]',refs.modal).forEach(b=>b.addEventListener('click',()=>confirmBox('Eliminar aplicación','Se retirará esta aplicación del cuaderno.',()=>{closeModal(); mutate(s=>{const ii=s.interventions.find(x=>x.id===id); ii.applications=ii.applications.filter(a=>a.id!==b.dataset.deleteSavedApp); if(!ii.applications.length) s.interventions=s.interventions.filter(x=>x.id!==id);},'Aplicación eliminada.');},'Eliminar',true))); }
+  function updateSavedApp(interventionId,appId,fd){ const i=state.interventions.find(x=>x.id===interventionId), old=i?.applications.find(a=>a.id===appId); if(!i||!old) return; const candidate=normalizeApp({...old,lot:fd.get('lot'),lha:fd.get('lha'),doseApplied:fd.get('doseApplied'),doseUnit:fd.get('doseUnit'),observations:fd.get('observations'),incidence:fd.get('incidence'),updatedAt:nowIso()}); const bad=blockers(validate(candidate,{date:i.date,futureConfirmed:true})); if(bad.length) return toast(bad[0].text,'danger'); mutate(s=>{const ii=s.interventions.find(x=>x.id===interventionId); const n=ii.applications.findIndex(a=>a.id===appId); ii.applications[n]=candidate; ii.updatedAt=nowIso();},'Cambios guardados.'); closeModal(); }
+
+  function exportNotebook(type){ const rows=officialRows(); if(!rows.length) return toast('No hay datos para exportar.','danger'); if(type==='csv'){ const csv=[headers,...rows].map(r=>r.map(csvCell).join(';')).join('\n'); return download(new Blob(['\ufeff'+csv],{type:'text/csv;charset=utf-8'}),'cuaderno_tratamientos_v2_0.csv'); } if(type==='excel'){ const x=excelXml(headers,rows); return download(new Blob([x],{type:'application/vnd.ms-excel'}),'cuaderno_tratamientos_v2_0.xls'); } const compact=type==='pdf-compact'; const pdf=simplePdf(compact?'Cuaderno de tratamientos · compacto':'Cuaderno de tratamientos · oficial',pdfLines(rows,compact)); return download(new Blob([pdf],{type:'application/pdf'}),compact?'cuaderno_tratamientos_compacto_v2_0.pdf':'cuaderno_tratamientos_oficial_v2_0.pdf'); }
+  function csvCell(v){ return `"${String(v??'').replaceAll('"','""')}"`; }
+  function xml(v){ return String(v??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&apos;'); }
+  function excelXml(h,r){ const cell=v=>`<Cell><Data ss:Type="String">${xml(v)}</Data></Cell>`; return `<?xml version="1.0" encoding="UTF-8"?><?mso-application progid="Excel.Sheet"?><Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet"><Worksheet ss:Name="Cuaderno V2.0"><Table><Row>${h.map(cell).join('')}</Row>${r.map(row=>`<Row>${row.map(cell).join('')}</Row>`).join('')}</Table></Worksheet></Workbook>`; }
+  function pdfLines(rows,compact){ if(compact) return rows.map(r=>`${r[1]} | ${r[2]} | Lote ${r[4]} | ${r[6]} | ${r[8]} | ${r[10]}`); const out=[]; rows.forEach(r=>{out.push(`N.º ${r[0]} · ${r[1]} · ${r[2]}`); out.push(`Registro: ${r[3]} | Lote: ${r[4]} | Cultivo: ${r[9]} | Objetivo: ${r[10]}`); out.push(`Dosis recomendada: ${r[5]} | Aplicada: ${r[6]} | Volumen: ${r[7]} | L/ha: ${r[8]}`); out.push(`P.S.: ${r[11]} | Tratamientos campaña: ${r[12]} | Principios: ${r[13]} | Mezcla: ${r[14]}`); out.push(' ');}); return out; }
+  function simplePdf(title,lines){ const safe=t=>String(t??'').replaceAll('\\','\\\\').replaceAll('(','\\(').replaceAll(')','\\)').replace(/[^\x20-\x7EáéíóúÁÉÍÓÚñÑüÜºª·|/.,:;_+\-= ]/g,' '); const wrapped=[]; [title,'',...lines].forEach(line=>{const s=safe(line); for(let i=0;i<s.length||i===0;i+=92) wrapped.push(s.slice(i,i+92));}); const pages=[]; for(let i=0;i<wrapped.length;i+=48) pages.push(wrapped.slice(i,i+48)); const objs=['<< /Type /Catalog /Pages 2 0 R >>','<< /Type /Pages /Kids [] /Count 0 >>','<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>']; const refs=[]; pages.forEach(page=>{const pageNo=objs.length+1, contentNo=pageNo+1; refs.push(`${pageNo} 0 R`); objs.push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 842 595] /Resources << /Font << /F1 3 0 R >> >> /Contents ${contentNo} 0 R >>`); let y=560; const cmds=['BT','/F1 9 Tf']; page.forEach((line,idx)=>{if(idx===0&&line===title)cmds.push('/F1 14 Tf'); cmds.push(`1 0 0 1 36 ${y} Tm (${safe(line)}) Tj`); if(idx===0&&line===title)cmds.push('/F1 9 Tf'); y-=10.5;}); cmds.push('ET'); const stream=cmds.join('\n'); objs.push(`<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`);}); objs[1]=`<< /Type /Pages /Kids [${refs.join(' ')}] /Count ${pages.length} >>`; let pdf='%PDF-1.4\n'; const offsets=[0]; objs.forEach((o,i)=>{offsets.push(pdf.length); pdf+=`${i+1} 0 obj\n${o}\nendobj\n`;}); const x=pdf.length; pdf+=`xref\n0 ${objs.length+1}\n0000000000 65535 f \n`; offsets.slice(1).forEach(off=>pdf+=`${String(off).padStart(10,'0')} 00000 n \n`); pdf+=`trailer\n<< /Size ${objs.length+1} /Root 1 0 R >>\nstartxref\n${x}\n%%EOF`; return pdf; }
+  function download(blob,name){ const url=URL.createObjectURL(blob), a=document.createElement('a'); a.href=url; a.download=name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),1200); }
+
+  function renderAlertas(){ const alerts=alertList(); refs.views.alertas.innerHTML=`<div class="stack"><section class="card"><div class="section-heading"><div><h2>Alertas</h2><p class="muted">A verificar, incidencias abiertas, máximos y revisión documental pendiente.</p></div>${badge(`${alerts.length} activas`,alerts.length?'danger':'success')}</div></section>${alerts.length?`<section class="stack">${alerts.map(renderAlertCard).join('')}</section>`:'<section class="card empty-state">No hay alertas activas.</section>'}</div>`; bindAlertCards(refs.views.alertas); }
+  function renderAlertCard(a){ return `<article class="alert-card alert-${esc(a.tone)}"><div class="section-heading"><div><h3>${esc(a.title)}</h3><p class="muted">${esc(a.detail)}</p></div>${badge(a.tone==='danger'?'Alerta':'Revisar',a.tone)}</div><div class="action-row">${a.productId?`<button class="secondary-button" data-edit-product="${a.productId}" type="button">Ver ficha</button>`:''}${a.resolvable?`<button class="primary-button" data-resolve-alert="${a.id}" type="button">Marcar resuelta</button>`:'<button class="ghost-button" type="button" disabled>No resoluble mientras persista la causa</button>'}</div></article>`; }
+  function bindAlertCards(root){ $$('[data-edit-product]',root).forEach(b=>b.addEventListener('click',()=>openProductEditor(b.dataset.editProduct,'ficha'))); $$('[data-resolve-alert]',root).forEach(b=>b.addEventListener('click',()=>mutate(s=>{if(!s.resolvedAlerts.includes(b.dataset.resolveAlert))s.resolvedAlerts.push(b.dataset.resolveAlert);},'Incidencia marcada como resuelta.'))); }
+
+  function renderMas(){ const products=state.products.filter(p=>!p.archived && searchMatch(p.name,p.registration,p.activeIngredients,p.mix,p.uses.map(u=>`${u.crop} ${u.target} ${u.ps}`).join(' '))); refs.views.mas.innerHTML=`<div class="stack"><section class="card"><div class="section-heading"><div><h2>Más</h2><p class="muted">Catálogo, borradores, copias e importación, ajustes.</p></div></div></section><section class="card"><div class="section-heading"><div><h2>Catálogo de productos</h2><p class="muted">${products.length} ficha(s) visibles.</p></div><button class="primary-button" id="newProduct" type="button">Nuevo producto</button></div><div class="stack">${products.length?products.map(renderProductCard).join(''):'<div class="empty-state">Aún no hay productos en el catálogo.</div>'}</div></section><section class="card"><div class="section-heading"><div><h2>Borradores</h2><p class="muted">${state.drafts.length} pendiente(s).</p></div></div>${state.drafts.length?`<div class="stack">${state.drafts.map(d=>`<article class="draft-card"><div class="section-heading"><div><h3>${esc(d.title)}</h3><p class="muted">${d.groups.length} fecha(s) · ${draftAppCount(d)} aplicación(es)</p></div></div><div class="action-row"><button class="secondary-button" data-resume-draft="${d.id}" type="button">Retomar</button><button class="danger-outline-button" data-discard-draft="${d.id}" type="button">Descartar</button></div></article>`).join('')}</div>`:'<div class="empty-state">Sin borradores.</div>'}</section><section class="card"><div class="section-heading"><div><h2>Copias e importación</h2><p class="muted">La copia completa incluye fichas, cuaderno, borradores y documentación.</p></div></div><div class="action-row"><button class="primary-button" id="backupDownload" type="button">Descargar copia completa</button><button class="secondary-button" id="backupImport" type="button">Importar copia</button></div><p class="small-note top-gap">Restauración por sustituir o fusionar, con conflictos revisables caso por caso.</p></section><section class="card"><div class="section-heading"><div><h2>Ajustes</h2><p class="muted">Configuración operativa de campaña.</p></div></div><form id="settingsForm" class="stack"><label class="field"><span>Aplicador activo</span><input class="field-input" name="applicator" value="${esc(state.settings.applicator)}" /></label><label class="field"><span>Litros/ha habituales</span><input class="field-input" name="defaultLha" type="number" step="0.001" value="${esc(state.settings.defaultLha)}" /></label><div class="action-row"><button class="primary-button" type="submit">Guardar ajustes</button></div></form></section></div>`; bindMas(); }
+  function renderProductCard(p){ return `<article class="product-card ${p.status!=='verified'?'has-alert':''}"><div class="section-heading"><div><h3>${esc(p.name)}</h3><p class="muted">Registro: ${esc(p.registration)} · ${prodCount(p.id)} uso(s) reales</p></div>${statusBadge(p)}</div><div class="meta-row">${badge(`MEZCLA: ${p.mix}`,p.mix==='SOLO'?'danger':'neutral')}${badge(`${p.docs.length} documento(s)`,p.docs.length?'info':'warning')}</div><div class="action-row top-gap"><button class="secondary-button" data-edit-product="${p.id}" data-tab="ficha" type="button">Ver ficha</button><button class="secondary-button" data-edit-product="${p.id}" data-tab="manual" type="button">Editar ficha</button><button class="secondary-button" data-edit-product="${p.id}" data-tab="docs" type="button">Documentación</button></div></article>`; }
+  function bindMas(){
+    $('#newProduct',refs.views.mas)?.addEventListener('click',()=>openProductEditor(null,'manual'));
+    $$('[data-edit-product]',refs.views.mas).forEach(b=>b.addEventListener('click',()=>openProductEditor(b.dataset.editProduct,b.dataset.tab||'ficha')));
+    $$('[data-resume-draft]',refs.views.mas).forEach(b=>b.addEventListener('click',()=>{ui.activeDraftId=b.dataset.resumeDraft; setView('nuevo');}));
+    $$('[data-discard-draft]',refs.views.mas).forEach(b=>b.addEventListener('click',()=>discardDraft(b.dataset.discardDraft)));
+    $('#backupDownload',refs.views.mas)?.addEventListener('click',backupDownload);
+    $('#backupImport',refs.views.mas)?.addEventListener('click',()=>refs.backupInput.click());
+    $('#settingsForm',refs.views.mas)?.addEventListener('submit',e=>{e.preventDefault(); const fd=new FormData(e.currentTarget), l=num(fd.get('defaultLha')); mutate(s=>{s.settings.applicator=String(fd.get('applicator')||'').trim()||s.settings.applicator; if(l!==null)s.settings.defaultLha=l;},'Ajustes guardados.');});
   }
 
-  function openPrintWindow(title, body, mode) {
-    const win = window.open("", "_blank", "noopener,noreferrer");
-    if (!win) {
-      toast("El navegador ha bloqueado la ventana de impresión.");
-      return;
-    }
-    win.document.write(`
-      <!doctype html>
-      <html lang="es">
-      <head>
-        <meta charset="utf-8">
-        <title>${escapeHtml(title)}</title>
-        <style>
-          @page { size: A4 ${mode === "official" ? "landscape" : "portrait"}; margin: ${mode === "official" ? "11mm" : "14mm"}; }
-          body { font-family: Arial, sans-serif; color:#111; }
-          h1 { text-align:center; font-size:${mode === "official" ? "18px" : "20px"}; text-decoration:${mode === "official" ? "underline" : "none"}; margin:0 0 18px; }
-          .applicator { font-size:13px; margin:0 0 16px; text-decoration:underline; }
-          table { width:100%; border-collapse:collapse; font-size:${mode === "official" ? "7.2px" : "10px"}; }
-          th, td { border:1px solid #aab8c5; padding:${mode === "official" ? "4px 3px" : "5px"}; text-align:center; vertical-align:middle; white-space:pre-line; }
-          th { background:#2b74b9; color:#fff; font-weight:700; }
-          td.tech { background:#fff4d2; }
-          td.pending { background:#f5caca; font-weight:700; color:#7e1f2b; }
-          .compact-card { border:1px solid #bbb; border-radius:10px; padding:10px 12px; margin:0 0 10px; break-inside:avoid; }
-          .compact-card h2 { font-size:15px; margin:0 0 6px; }
-          .compact-card p { margin:4px 0; font-size:12px; }
-        </style>
-      </head>
-      <body>${body}</body>
-      </html>
-    `);
-    win.document.close();
-    win.focus();
-    setTimeout(() => win.print(), 350);
+  function openProductEditor(id,tab='ficha'){
+    const existing=id?product(id):null;
+    const p=existing?JSON.parse(JSON.stringify(existing)):normalizeProduct({id:uid('prod'),name:'',uses:[blankUse()]});
+    ui.tab=tab;
+    modal(productModal(p,tab,Boolean(existing)),'wide-modal');
+    bindProductEditor(p.id,Boolean(existing));
   }
+  function productModal(p,tab,exists){ return `<div class="modal-head"><div><h2>${esc(p.name||'Nueva ficha de producto')}</h2><p class="muted">${exists?'Ficha existente':'Alta provisional / nueva ficha'}</p></div><button class="icon-button" data-close-modal type="button">×</button></div><div class="tab-row"><button class="${tab==='ficha'?'active':''}" data-switch-tab="ficha" type="button">Ver ficha</button><button class="${tab==='manual'?'active':''}" data-switch-tab="manual" type="button">Editar ficha</button><button class="${tab==='docs'?'active':''}" data-switch-tab="docs" type="button">Documentación</button><button class="${tab==='review'?'active':''}" data-switch-tab="review" type="button">Revisión documental</button></div><div class="product-tab-panel">${tab==='ficha'?productFicha(p):tab==='manual'?productManual(p,exists):tab==='docs'?productDocs(p):productReviewIntro(p)}</div>`; }
+  function productFicha(p){ return `<div class="stack"><section class="panel nested-panel"><div class="section-heading"><div><h3>Estado de ficha</h3><p class="muted">${p.status==='verified'?'Todos los mínimos obligatorios están resueltos.':'Hay datos obligatorios A verificar.'}</p></div>${statusBadge(p)}</div><div class="info-grid"><div class="mini-metric"><span>N.º registro</span><strong>${esc(p.registration)}</strong></div><div class="mini-metric"><span>Principios activos</span><strong>${esc(p.activeIngredients)}</strong></div><div class="mini-metric"><span>MEZCLA</span><strong>${esc(p.mix)}</strong></div><div class="mini-metric"><span>Aplicaciones registradas</span><strong>${prodCount(p.id)}</strong></div></div></section><section class="panel nested-panel"><h3>Usos técnicos</h3><div class="stack">${p.uses.map(u=>`<article class="soft-box"><strong>${esc(u.crop||'Cultivo A verificar')} · ${esc(u.target||'Objetivo A verificar')}</strong><p class="small-note">Dosis: ${esc(u.doseDisplay)} · Volumen: ${esc(u.volumeDisplay)} · P.S.: ${esc(u.ps)} · Máx. campaña: ${esc(u.maxApplications??'A verificar')}</p></article>`).join('')}</div></section><section class="panel nested-panel"><h3>Fuente</h3>${sourceLines(p)||'<p class="muted">No hay documentación técnica asociada.</p>'}</section><div class="action-row"><button class="primary-button" data-switch-tab="manual" type="button">Editar ficha</button><button class="secondary-button" data-switch-tab="docs" type="button">Documentación técnica</button></div></div>`; }
+  function productManual(p,exists){ return `<form id="productForm" class="stack" data-product="${p.id}"><div class="form-grid"><label class="field"><span>Nombre comercial</span><input class="field-input" name="name" value="${esc(p.name==='Producto sin nombre'?'':p.name)}" required /></label><label class="field"><span>N.º de registro</span><input class="field-input" name="registration" value="${esc(p.registration)}" /></label></div><label class="field"><span>Principios activos</span><input class="field-input" name="activeIngredients" value="${esc(p.activeIngredients)}" /></label><label class="field"><span>MEZCLA</span><select class="field-select" name="mix">${['A verificar','——','SOLO'].map(o=>`<option value="${o}" ${p.mix===o?'selected':''}>${o}</option>`).join('')}</select></label><section class="panel nested-panel"><div class="section-heading"><div><h3>Usos autorizados / indicados</h3><p class="muted">Cada uso se guarda por cultivo y objetivo.</p></div><button class="secondary-button" id="addUse" type="button">Añadir uso</button></div><div id="useEditors" class="stack">${p.uses.map((u,n)=>useEditor(u,n)).join('')}</div></section><div class="action-row"><button class="primary-button" type="submit">Guardar ficha</button>${exists?`<button class="danger-outline-button" data-archive="${p.id}" type="button">${p.archived?'Reactivar':'Archivar'}</button>`:''}</div></form>`; }
+  function useEditor(u,n){ const dk=u.doseRule?.kind||'unset', vk=u.volumeRule?.kind||'unset'; return `<article class="review-card use-editor" data-use-index="${n}"><div class="section-heading"><h3>Uso ${n+1}</h3><button class="danger-outline-button" data-remove-use="${n}" type="button">Quitar</button></div><div class="form-grid"><label class="field"><span>Cultivo / uso</span><input class="field-input" name="crop_${n}" value="${esc(u.crop)}" /></label><label class="field"><span>Plaga / objetivo</span><input class="field-input" name="target_${n}" value="${esc(u.target)}" /></label></div><div class="form-grid"><label class="field"><span>P.S.</span><input class="field-input" name="ps_${n}" value="${esc(u.ps)}" /></label><label class="field"><span>Máx. aplicaciones campaña</span><input class="field-input" name="max_${n}" type="number" step="1" min="0" value="${u.maxApplications??''}" /></label></div><label class="field"><span>Dosis recomendada visible</span><input class="field-input" name="doseDisplay_${n}" value="${esc(u.doseDisplay)}" /></label><div class="form-grid"><label class="field"><span>Regla de dosis</span><select class="field-select dose-kind" name="doseKind_${n}" data-index="${n}"><option value="unset" ${dk==='unset'?'selected':''}>A verificar</option><option value="single" ${dk==='single'?'selected':''}>Dosis única</option><option value="range" ${dk==='range'?'selected':''}>Mínimo y máximo</option></select></label><label class="field"><span>Unidad dosis</span><select class="field-select" name="doseUnit_${n}"><option value="">A verificar</option>${units.map(x=>`<option value="${x}" ${u.doseRule?.unit===x?'selected':''}>${x}</option>`).join('')}</select></label></div><div class="form-grid"><label class="field dose-single-${n} ${dk==='single'?'':'hidden-field'}"><span>Valor único</span><input class="field-input" name="doseValue_${n}" type="number" step="0.001" value="${u.doseRule?.value??''}" /></label><label class="field dose-range-${n} ${dk==='range'?'':'hidden-field'}"><span>Mínimo</span><input class="field-input" name="doseMin_${n}" type="number" step="0.001" value="${u.doseRule?.min??''}" /></label><label class="field dose-range-${n} ${dk==='range'?'':'hidden-field'}"><span>Máximo</span><input class="field-input" name="doseMax_${n}" type="number" step="0.001" value="${u.doseRule?.max??''}" /></label><label class="field"><span>Límite por hectárea</span><input class="field-input" name="doseLimit_${n}" type="number" step="0.001" value="${u.doseRule?.limitHa??''}" /></label></div><label class="field"><span>Volumen caldo visible</span><input class="field-input" name="volumeDisplay_${n}" value="${esc(u.volumeDisplay)}" /></label><div class="form-grid"><label class="field"><span>Selector volumen caldo</span><select class="field-select volume-kind" name="volumeKind_${n}" data-index="${n}"><option value="unset" ${vk==='unset'?'selected':''}>A verificar</option><option value="single" ${vk==='single'?'selected':''}>Volumen único</option><option value="range" ${vk==='range'?'selected':''}>Volumen mínimo y máximo</option></select></label><label class="field"><span>Unidad</span><input class="field-input" value="L/ha" disabled /></label></div><div class="form-grid"><label class="field volume-single-${n} ${vk==='single'?'':'hidden-field'}"><span>Volumen único L/ha</span><input class="field-input" name="volumeValue_${n}" type="number" step="0.001" value="${u.volumeRule?.value??''}" /></label><label class="field volume-range-${n} ${vk==='range'?'':'hidden-field'}"><span>Mínimo L/ha</span><input class="field-input" name="volumeMin_${n}" type="number" step="0.001" value="${u.volumeRule?.min??''}" /></label><label class="field volume-range-${n} ${vk==='range'?'':'hidden-field'}"><span>Máximo L/ha</span><input class="field-input" name="volumeMax_${n}" type="number" step="0.001" value="${u.volumeRule?.max??''}" /></label></div><div class="form-grid"><label class="field"><span>Intervalo / condiciones</span><input class="field-input" name="interval_${n}" value="${esc(u.interval)}" /></label><label class="field"><span>Estadio</span><input class="field-input" name="stadium_${n}" value="${esc(u.stadium)}" /></label></div><label class="field"><span>Información adicional</span><textarea class="field-textarea" name="extra_${n}">${esc(u.extra)}</textarea></label></article>`; }
+  function productDocs(p){ return `<div class="stack"><section class="panel nested-panel"><div class="section-heading"><div><h3>Documentación técnica asociada</h3><p class="muted">Imágenes optimizadas y PDF/documentos consultables.</p></div><button class="primary-button" data-add-docs="${p.id}" type="button">Añadir archivos</button></div>${p.docs.length?`<div class="stack">${p.docs.map(d=>docCard(p.id,d)).join('')}</div>`:'<div class="empty-state">Sin documentación asociada.</div>'}</section><section class="panel nested-panel"><h3>Fuente</h3>${sourceLines(p)||'<p class="muted">No hay documentación técnica asociada.</p>'}</section><div class="action-row"><button class="secondary-button" data-switch-tab="review" type="button">Revisar desde documentación</button></div></div>`; }
+  function docCard(productId,d){ const img=String(d.type||'').startsWith('image/'), pdf=d.type==='application/pdf'||/\.pdf$/i.test(d.name||''); return `<article class="document-card"><div class="section-heading"><div><h3>${esc(d.name)}</h3><p class="muted">Aportado el ${fmtDate(d.addedOn)} · ${fmtNum(Math.round((d.size||0)/1024))} KB</p></div>${badge(img?'Imagen':pdf?'PDF':'Documento','info')}</div><div class="action-row">${img?`<button class="secondary-button" data-view-image="${d.id}" data-product-id="${productId}" type="button">Ver imagen ampliada</button>`:''}${pdf?`<button class="secondary-button" data-view-pdf="${d.id}" data-product-id="${productId}" type="button">Ver PDF</button>`:''}<button class="danger-outline-button" data-delete-doc="${d.id}" data-product-id="${productId}" type="button">Eliminar</button></div></article>`; }
+  function sourceLines(p){ if(!p.docs.length) return ''; const groups=new Map(); p.docs.forEach(d=>{const k=d.addedOn||todayIso(); if(!groups.has(k))groups.set(k,[]); groups.get(k).push(d.name);}); return [...groups.entries()].sort((a,b)=>b[0].localeCompare(a[0])).map(([date,names])=>`<p class="source-line"><strong>Documentación aportada el ${fmtDate(date)}:</strong> ${esc([...new Set(names)].join(', '))}.</p>`).join(''); }
+  function productReviewIntro(p){ return `<div class="stack"><section class="panel nested-panel"><h3>Extracción documental revisable</h3><p class="muted">La app propone datos con evidencia y confianza. No valida automáticamente datos dudosos.</p><div class="action-row"><button class="primary-button" data-run-review="${p.id}" type="button">Analizar documentación asociada</button></div></section><section class="panel nested-panel"><p class="small-note">Se prioriza texto real de PDF cuando está disponible. Las imágenes se conservan y se revisan en visor interno; esta versión no incorpora OCR pesado local.</p></section></div>`; }
 
-  async function exportBackup() {
-    const docs = [];
-    for (const doc of state.documents) {
-      docs.push({
-        ...doc,
-        blob: undefined,
-        dataUrl: doc.blob ? await blobToDataUrl(doc.blob) : null
-      });
-    }
-    const payload = {
-      type: "cuaderno-tratamientos-backup-v2",
-      appVersion: APP_VERSION,
-      exportedAt: nowIso(),
-      settings: state.settings,
-      products: state.products,
-      treatments: state.treatments,
-      documents: docs
-    };
-    downloadBlob(new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" }), `copia_completa_cuaderno_tratamientos_${state.settings?.campaign || "2026"}_v2_0.json`);
-    toast("Copia completa exportada.");
+  function bindProductEditor(productId,exists){
+    $$('[data-switch-tab]',refs.modal).forEach(b=>b.addEventListener('click',()=>{const p=product(productId)||normalizeProduct({id:productId,uses:[blankUse()]}); modal(productModal(p,b.dataset.switchTab,Boolean(product(productId))),'wide-modal'); bindProductEditor(p.id,Boolean(product(p.id)));}));
+    $('#addUse',refs.modal)?.addEventListener('click',()=>{const p=collectProductForm($('#productForm',refs.modal),productId,exists); p.uses.push(blankUse()); modal(productModal(p,'manual',exists),'wide-modal'); bindProductEditor(p.id,exists);});
+    $$('[data-remove-use]',refs.modal).forEach(b=>b.addEventListener('click',()=>{const p=collectProductForm($('#productForm',refs.modal),productId,exists); if(p.uses.length<=1) return toast('Debe existir al menos un uso técnico.','danger'); p.uses.splice(Number(b.dataset.removeUse),1); modal(productModal(p,'manual',exists),'wide-modal'); bindProductEditor(p.id,exists);}));
+    $$('.dose-kind',refs.modal).forEach(s=>s.addEventListener('change',()=>toggleDoseInputs(s.dataset.index,s.value)));
+    $$('.volume-kind',refs.modal).forEach(s=>s.addEventListener('change',()=>toggleVolumeInputs(s.dataset.index,s.value)));
+    $('#productForm',refs.modal)?.addEventListener('submit',e=>{e.preventDefault(); const p=collectProductForm(e.currentTarget,productId,exists); if(!p.name.trim()||p.name==='Producto sin nombre') return toast('El nombre comercial es obligatorio.','danger'); mutate(s=>{const n=s.products.findIndex(x=>x.id===p.id); if(n>=0)s.products[n]=p; else s.products.push(p);},p.status==='verified'?'Ficha guardada y verificada.':'Ficha guardada A verificar.'); closeModal();});
+    $('[data-archive]',refs.modal)?.addEventListener('click',b=>{mutate(s=>{const p=s.products.find(x=>x.id===b.dataset.archive); if(p){p.archived=!p.archived;p.updatedAt=nowIso();}},'Estado del producto actualizado.'); closeModal();});
+    $$('[data-add-docs]',refs.modal).forEach(b=>b.addEventListener('click',()=>{ui.pendingDocProductId=b.dataset.addDocs; refs.docsInput.click();}));
+    $$('[data-view-image]',refs.modal).forEach(b=>b.addEventListener('click',()=>viewImage(b.dataset.productId,b.dataset.viewImage)));
+    $$('[data-view-pdf]',refs.modal).forEach(b=>b.addEventListener('click',()=>viewPdf(b.dataset.productId,b.dataset.viewPdf)));
+    $$('[data-delete-doc]',refs.modal).forEach(b=>b.addEventListener('click',()=>deleteDocument(b.dataset.productId,b.dataset.deleteDoc)));
+    $('[data-run-review]',refs.modal)?.addEventListener('click',b=>runReview(b.dataset.runReview));
   }
+  function toggleDoseInputs(n,kind){ $$('.dose-single-'+n,refs.modal).forEach(x=>x.classList.toggle('hidden-field',kind!=='single')); $$('.dose-range-'+n,refs.modal).forEach(x=>x.classList.toggle('hidden-field',kind!=='range')); }
+  function toggleVolumeInputs(n,kind){ $$('.volume-single-'+n,refs.modal).forEach(x=>x.classList.toggle('hidden-field',kind!=='single')); $$('.volume-range-'+n,refs.modal).forEach(x=>x.classList.toggle('hidden-field',kind!=='range')); }
+  function collectProductForm(form,id,exists){ const old=product(id), fd=new FormData(form), uses=[]; $$('.use-editor',form).forEach((_,n)=>{const dk=String(fd.get(`doseKind_${n}`)||'unset'), vk=String(fd.get(`volumeKind_${n}`)||'unset'); uses.push(normalizeUse({id:old?.uses?.[n]?.id||uid('uso'),crop:String(fd.get(`crop_${n}`)||'').trim(),target:String(fd.get(`target_${n}`)||'').trim(),ps:String(fd.get(`ps_${n}`)||'').trim()||'A verificar',maxApplications:num(fd.get(`max_${n}`)),doseDisplay:String(fd.get(`doseDisplay_${n}`)||'').trim()||'A verificar',doseRule:{kind:dk,unit:String(fd.get(`doseUnit_${n}`)||'').trim(),value:dk==='single'?num(fd.get(`doseValue_${n}`)):null,min:dk==='range'?num(fd.get(`doseMin_${n}`)):null,max:dk==='range'?num(fd.get(`doseMax_${n}`)):null,limitHa:num(fd.get(`doseLimit_${n}`))},volumeDisplay:String(fd.get(`volumeDisplay_${n}`)||'').trim()||'A verificar',volumeRule:{kind:vk,value:vk==='single'?num(fd.get(`volumeValue_${n}`)):null,min:vk==='range'?num(fd.get(`volumeMin_${n}`)):null,max:vk==='range'?num(fd.get(`volumeMax_${n}`)):null},interval:String(fd.get(`interval_${n}`)||'').trim(),stadium:String(fd.get(`stadium_${n}`)||'').trim(),extra:String(fd.get(`extra_${n}`)||'').trim()}));}); const p=normalizeProduct({...old,id:id||uid('prod'),name:String(fd.get('name')||old?.name||'').trim(),registration:String(fd.get('registration')||'').trim()||'A verificar',activeIngredients:String(fd.get('activeIngredients')||'').trim()||'A verificar',mix:String(fd.get('mix')||'A verificar'),uses:uses.length?uses:[blankUse()],docs:old?.docs||[],archived:old?.archived||false,createdAt:old?.createdAt||nowIso(),updatedAt:nowIso()}); p.status=productIsVerified(p)?'verified':'pending'; return p; }
 
-  async function previewImportFile(file) {
-    try {
-      const text = await file.text();
-      const payload = JSON.parse(text);
-      const preview = inspectImportPayload(payload);
-      state.pendingImportPayload = payload;
-      state.importPreview = preview;
-      render();
-      toast("JSON leído. Revisa la vista previa.");
-    } catch (error) {
-      console.error(error);
-      toast("El JSON no es válido.");
-    }
+  async function optimizeImage(file){ return new Promise((res,rej)=>{const img=new Image(), url=URL.createObjectURL(file); img.onload=()=>{try{const max=1800, r=Math.min(1,max/Math.max(img.width,img.height)), canvas=document.createElement('canvas'); canvas.width=Math.round(img.width*r); canvas.height=Math.round(img.height*r); canvas.getContext('2d').drawImage(img,0,0,canvas.width,canvas.height); canvas.toBlob(blob=>{URL.revokeObjectURL(url); blob?res(blob):rej(new Error('No blob'));},file.type==='image/png'?'image/png':'image/jpeg',0.88);}catch(e){URL.revokeObjectURL(url);rej(e);}}; img.onerror=()=>{URL.revokeObjectURL(url);rej(new Error('Imagen no legible'));}; img.src=url;}); }
+  async function addDocs(productId,files){ const p=product(productId); if(!p||!files.length) return; const docs=[]; for(const file of files){let blob=file; if(file.type?.startsWith('image/')){try{blob=await optimizeImage(file);}catch{blob=file;}} const d={id:uid('doc'),name:file.name||`documento_${Date.now()}`,type:blob.type||file.type||'application/octet-stream',size:blob.size||file.size||0,addedOn:todayIso(),createdAt:nowIso()}; await putDoc(d.id,blob); docs.push(d);} mutate(s=>{const pp=s.products.find(x=>x.id===productId); pp.docs.push(...docs); pp.updatedAt=nowIso();},'Documentación asociada.'); const fresh=product(productId); modal(productModal(fresh,'docs',true),'wide-modal'); bindProductEditor(productId,true); }
+  async function viewImage(productId,docId){ const p=product(productId), d=p?.docs.find(x=>x.id===docId), blob=await getDoc(docId); if(!d||!blob) return toast('No se pudo abrir la imagen.','danger'); const url=URL.createObjectURL(blob); modal(`<div class="modal-head"><h2>Ver imagen ampliada</h2><button class="icon-button" data-close-modal type="button">×</button></div><div class="image-viewer"><img src="${url}" alt="${esc(d.name)}" /></div><div class="action-row"><button class="secondary-button" id="backDocs" type="button">Volver al visor documental</button></div>`,'wide-modal'); $('#backDocs',refs.modal)?.addEventListener('click',()=>{URL.revokeObjectURL(url); const fresh=product(productId); modal(productModal(fresh,'docs',true),'wide-modal'); bindProductEditor(productId,true);}); }
+  async function viewPdf(productId,docId){ const p=product(productId), d=p?.docs.find(x=>x.id===docId), blob=await getDoc(docId); if(!d||!blob) return toast('No se pudo abrir el PDF.','danger'); const url=URL.createObjectURL(blob); modal(`<div class="modal-head"><h2>${esc(d.name)}</h2><button class="icon-button" data-close-modal type="button">×</button></div><iframe class="pdf-frame" src="${url}" title="${esc(d.name)}"></iframe><div class="action-row"><button class="secondary-button" id="backDocs" type="button">Volver al visor documental</button></div>`,'wide-modal'); $('#backDocs',refs.modal)?.addEventListener('click',()=>{URL.revokeObjectURL(url); const fresh=product(productId); modal(productModal(fresh,'docs',true),'wide-modal'); bindProductEditor(productId,true);}); }
+  function deleteDocument(productId,docId){ confirmBox('Eliminar documentación','El archivo se retirará de la ficha y Fuente se actualizará automáticamente.',async()=>{await delDoc(docId); mutate(s=>{const p=s.products.find(x=>x.id===productId); p.docs=p.docs.filter(d=>d.id!==docId); p.updatedAt=nowIso();},'Documento eliminado.'); const fresh=product(productId); modal(productModal(fresh,'docs',true),'wide-modal'); bindProductEditor(productId,true);},'Eliminar',true); }
+  async function runReview(productId){ const p=product(productId); if(!p||!p.docs.length) return toast('No hay documentación para revisar.','danger'); const files=[]; for(const d of p.docs){const blob=await getDoc(d.id); if(blob) files.push(new File([blob],d.name,{type:d.type}));} const text=window.DocumentAssist?.extractTextFromFiles?await window.DocumentAssist.extractTextFromFiles(files):''; const proposals=reviewProposals(p,text); modal(reviewModal(p,proposals,text),'wide-modal'); $('#reviewForm',refs.modal)?.addEventListener('submit',e=>{e.preventDefault(); const fd=new FormData(e.currentTarget); mutate(s=>{const pp=s.products.find(x=>x.id===productId); const u=pp.uses[0]||blankUse(); if(!pp.uses.length) pp.uses.push(u); proposals.forEach((pr,n)=>{if(!fd.get(`accept_${n}`)) return; const value=String(fd.get(`value_${n}`)||'').trim(); if(!value) return; if(pr.scope==='product') pp[pr.key]=value; else u[pr.key]=pr.key==='maxApplications'?num(value):value;}); pp.status=productIsVerified(pp)?'verified':'pending'; pp.updatedAt=nowIso();},'Datos confirmados aplicados.'); closeModal();}); }
+  function reviewProposals(p,text){ const t=String(text||'').replace(/\s+/g,' ').trim(), u=p.uses[0]||blankUse(); const reg=t.match(/\b(?:ES[-\s]?)?(\d{4,6})\b/)?.[1]||''; const active=t.match(/(?:composici[oó]n|sustancia activa|principio[s]? activo[s]?)[^.;:]{0,20}[:\-]?\s*([^.;]{4,120})/i)?.[1]?.trim()||''; const solo=/\b(aplicar solo|no mezclar|solo)\b/i.test(t); const ps=t.match(/(?:plazo de seguridad|p\.?\s*s\.?)[^0-9]{0,20}(\d{1,3})\s*d[ií]as?/i)?.[1]||''; const max=t.match(/(?:máx(?:imo)?\.?\s*(?:de)?\s*aplicaciones|n[uú]mero máximo de aplicaciones)[^0-9]{0,20}(\d{1,2})/i)?.[1]||''; const dose=t.match(/(\d+(?:[.,]\d+)?)\s*(?:-|a)\s*(\d+(?:[.,]\d+)?)\s*(g\/h[lL]|kg\/h[lL]|m[lL]\/h[lL]|l\/h[lL]|g\/ha|kg\/ha|m[lL]\/ha|l\/ha)/i)?.[0]||t.match(/(\d+(?:[.,]\d+)?)\s*(g\/h[lL]|kg\/h[lL]|m[lL]\/h[lL]|l\/h[lL]|g\/ha|kg\/ha|m[lL]\/ha|l\/ha)/i)?.[0]||''; const vol=t.match(/(\d+(?:[.,]\d+)?)\s*(?:-|a)\s*(\d+(?:[.,]\d+)?)\s*l\/ha/i)?.[0]||t.match(/(\d+(?:[.,]\d+)?)\s*l\/ha/i)?.[0]||''; return [
+    {key:'registration',label:'N.º de registro',proposal:reg||p.registration,evidence:reg?`Coincidencia numérica: ${reg}`:'No se encontró evidencia inequívoca.',confidence:reg?'Media':'Baja',scope:'product'},
+    {key:'activeIngredients',label:'Principios activos',proposal:active||p.activeIngredients,evidence:active?active:'No se encontró bloque textual claro.',confidence:active?'Media':'Baja',scope:'product'},
+    {key:'mix',label:'MEZCLA',proposal:solo?'SOLO':p.mix,evidence:solo?'Se detecta referencia textual a aplicación sin mezcla.':'No consta evidencia inequívoca de SOLO.',confidence:solo?'Media':'Baja',scope:'product'},
+    {key:'ps',label:'P.S.',proposal:ps?`${ps} días`:u.ps,evidence:ps?`${ps} días`:'No se encontró P.S. inequívoco.',confidence:ps?'Media':'Baja',scope:'use'},
+    {key:'maxApplications',label:'Máx. aplicaciones campaña',proposal:max||u.maxApplications||'',evidence:max?max:'No se encontró límite inequívoco.',confidence:max?'Media':'Baja',scope:'use'},
+    {key:'doseDisplay',label:'Dosis recomendada',proposal:dose||u.doseDisplay,evidence:dose||'No se encontró dosis inequívoca.',confidence:dose?'Media':'Baja',scope:'use'},
+    {key:'volumeDisplay',label:'Volumen caldo',proposal:vol||u.volumeDisplay,evidence:vol||'No se encontró volumen inequívoco en L/ha.',confidence:vol?'Media':'Baja',scope:'use'}
+  ]; }
+  function reviewModal(p,prs,text){ return `<div class="modal-head"><div><h2>Revisión documental · ${esc(p.name)}</h2><p class="muted">Confirma cada recuadro azul o corrige manualmente antes de aplicar.</p></div><button class="icon-button" data-close-modal type="button">×</button></div><form id="reviewForm" class="stack">${prs.map((pr,n)=>`<article class="review-card"><div class="section-heading"><div><h3>${esc(pr.label)}</h3><p class="muted">Confianza: ${esc(pr.confidence)}</p></div>${badge(pr.confidence,pr.confidence==='Media'?'info':'warning')}</div><p class="small-note"><strong>Evidencia:</strong> ${esc(pr.evidence)}</p><label class="field"><span>Propuesta / corrección manual</span><input class="field-input" name="value_${n}" value="${esc(pr.proposal||'')}" /></label><label class="checkbox-card blue-check"><input type="checkbox" name="accept_${n}" /><span>Confirmo este dato</span></label></article>`).join('')}<section class="panel nested-panel"><h3>Texto detectado</h3><p class="small-note">${esc((text||'Sin texto estructurado disponible.').slice(0,1800))}</p></section><div class="action-row"><button class="secondary-button" data-close-modal type="button">Cancelar</button><button class="primary-button" type="submit">Aplicar datos confirmados</button></div></form>`; }
+
+  function blobToDataUrl(blob){ return new Promise((res,rej)=>{const r=new FileReader(); r.onload=()=>res(r.result); r.onerror=()=>rej(r.error); r.readAsDataURL(blob);}); }
+  function dataUrlBlob(url){ const [head,body]=String(url).split(','), mime=head.match(/data:(.*?);base64/i)?.[1]||'application/octet-stream', raw=atob(body||''), arr=new Uint8Array(raw.length); for(let i=0;i<raw.length;i++)arr[i]=raw.charCodeAt(i); return new Blob([arr],{type:mime}); }
+  async function backupDownload(){ const docs=[]; for(const p of state.products){for(const d of p.docs){const blob=await getDoc(d.id); if(blob) docs.push({id:d.id,dataUrl:await blobToDataUrl(blob)});}} const payload={backupType:'CT-APP-V2-COMPLETE',createdAt:nowIso(),appVersion:VERSION,state,docs}; download(new Blob([JSON.stringify(payload,null,2)],{type:'application/json'}),'copia_completa_app_cuaderno_tratamientos_v2_0.json'); toast('Copia completa descargada.'); }
+  async function importBackup(file){ if(!file) return; let payload; try{payload=JSON.parse(await file.text());}catch{return toast('El archivo no es JSON válido.','danger');} if(!payload?.state||!String(payload.backupType||'').startsWith('CT-APP-V2')) return toast('La copia no pertenece a esta app.','danger'); modal(`<div class="modal-head"><h2>Importar copia</h2><button class="icon-button" data-close-modal type="button">×</button></div><p>Elige el modo de restauración.</p><div class="choice-grid"><button class="menu-card" data-import-mode="replace" type="button"><strong>Sustituir</strong><span>Reemplaza todos los datos locales actuales.</span></button><button class="menu-card" data-import-mode="merge" type="button"><strong>Fusionar</strong><span>Conserva lo actual y revisa conflictos producto a producto.</span></button></div>`); $$('[data-import-mode]',refs.modal).forEach(b=>b.addEventListener('click',()=>b.dataset.importMode==='replace'?replaceBackup(payload):mergeBackup(payload))); }
+  async function restoreDocs(docs){ for(const d of docs||[]){ if(d?.id&&d?.dataUrl) await putDoc(d.id,dataUrlBlob(d.dataUrl)); } }
+  async function replaceBackup(payload){ await restoreDocs(payload.docs); state=migrate(payload.state); state.importHistory.push({date:nowIso(),mode:'replace'}); save(); closeModal(); renderAll(); toast('Copia restaurada por sustitución.'); }
+  function mergeBackup(payload){ const incoming=migrate(payload.state); const conflicts=incoming.products.map(p=>({incoming:p,existing:byName(p.name)})).filter(x=>x.existing); if(!conflicts.length) return performMerge(payload,{}); modal(`<div class="modal-head"><h2>Resolver conflictos de productos</h2><button class="icon-button" data-close-modal type="button">×</button></div><form id="conflictForm" class="stack">${conflicts.map((c,n)=>`<article class="review-card"><h3>${esc(c.incoming.name)}</h3><p class="muted">Existe una ficha local con el mismo nombre.</p><label class="choice-line"><input type="radio" name="c_${n}" value="keep" checked /><span>Conservar ficha local</span></label><label class="choice-line"><input type="radio" name="c_${n}" value="replace" /><span>Usar ficha importada</span></label></article>`).join('')}<div class="action-row"><button class="secondary-button" data-close-modal type="button">Cancelar</button><button class="primary-button" type="submit">Fusionar</button></div></form>`,'wide-modal'); $('#conflictForm',refs.modal)?.addEventListener('submit',e=>{e.preventDefault(); const fd=new FormData(e.currentTarget), decisions={}; conflicts.forEach((c,n)=>decisions[norm(c.incoming.name)]=fd.get(`c_${n}`)||'keep'); performMerge(payload,decisions);}); }
+  async function performMerge(payload,decisions){ await restoreDocs(payload.docs); const incoming=migrate(payload.state); mutate(s=>{incoming.products.forEach(p=>{const local=s.products.find(x=>norm(x.name)===norm(p.name)); if(!local)s.products.push(p); else if(decisions[norm(p.name)]==='replace'){const n=s.products.findIndex(x=>x.id===local.id); s.products[n]=p;}}); incoming.interventions.forEach(i=>{let local=s.interventions.find(x=>x.date===i.date); if(!local)s.interventions.push(i); else i.applications.forEach(a=>{if(!local.applications.some(x=>x.productId===a.productId&&x.lot===a.lot))local.applications.push(a);});}); incoming.drafts.forEach(d=>{if(!s.drafts.some(x=>x.id===d.id))s.drafts.push(d);}); s.interventions.sort((a,b)=>a.date.localeCompare(b.date)); s.importHistory.push({date:nowIso(),mode:'merge'});},'Copia fusionada.'); closeModal(); }
+
+  function bindGlobal(){
+    refs.nav.forEach(b=>b.addEventListener('click',()=>setView(b.dataset.nav)));
+    refs.search?.addEventListener('input',e=>{ui.search=e.currentTarget.value; renderAll(); refs.search.focus(); try{refs.search.setSelectionRange(refs.search.value.length,refs.search.value.length);}catch{}});
+    refs.docsInput?.addEventListener('change',async e=>{const files=[...(e.currentTarget.files||[])], id=ui.pendingDocProductId; ui.pendingDocProductId=null; e.currentTarget.value=''; if(id&&files.length) await addDocs(id,files);});
+    refs.backupInput?.addEventListener('change',async e=>{await importBackup(e.currentTarget.files?.[0]); e.currentTarget.value='';});
+    window.addEventListener('beforeinstallprompt',e=>{e.preventDefault(); ui.installPrompt=e; refs.install?.classList.remove('install-hidden');});
+    refs.install?.addEventListener('click',async()=>{if(!ui.installPrompt)return; ui.installPrompt.prompt(); await ui.installPrompt.userChoice; ui.installPrompt=null; refs.install.classList.add('install-hidden');});
   }
+  function setupSW(){ if(!('serviceWorker' in navigator)) return; window.addEventListener('load',async()=>{try{const reg=await navigator.serviceWorker.register('./sw.js?v=2.0.0',{updateViaCache:'none'}); reg.update();}catch{toast('La app funciona, pero no se pudo activar el modo sin conexión.','warning');}}); }
 
-  function inspectImportPayload(payload) {
-    const products = Array.isArray(payload?.products) ? payload.products.length : 0;
-    const treatments = Array.isArray(payload?.treatments) ? payload.treatments.length : Array.isArray(payload?.tratamientos) ? payload.tratamientos.length : 0;
-    const documents = Array.isArray(payload?.documents) ? payload.documents.length : 0;
-    const type = payload?.type || "json-generico";
-    const typeLabel = type === "cuaderno-tratamientos-backup-v2"
-      ? "Copia completa V 2.0"
-      : type.includes("carga") || payload?.tratamientos
-        ? "Carga controlada de tratamientos"
-        : "JSON genérico compatible";
-    return { type, typeLabel, products, treatments, documents };
-  }
-
-  async function confirmPendingImport() {
-    const payload = state.pendingImportPayload;
-    if (!payload) return;
-
-    const preview = state.importPreview || inspectImportPayload(payload);
-    const isBackup = preview.type === "cuaderno-tratamientos-backup-v2";
-    const message = isBackup
-      ? "La restauración sustituirá los datos locales actuales por los contenidos del JSON. ¿Continuar?"
-      : "La importación añadirá los datos compatibles del JSON a la app. ¿Continuar?";
-    if (!window.confirm(message)) return;
-
-    if (isBackup) {
-      await restoreBackupPayload(payload);
-      toast("Copia restaurada.");
-    } else {
-      await importControlledPayload(payload);
-      toast("Importación controlada completada.");
-    }
-    clearPendingImport();
-    await refreshAll();
-    render();
-  }
-
-  function clearPendingImport() {
-    state.pendingImportPayload = null;
-    state.importPreview = null;
-    render();
-  }
-
-  async function restoreBackupPayload(payload) {
-    await dbClear(STORES.SETTINGS);
-    await dbClear(STORES.PRODUCTS);
-    await dbClear(STORES.TREATMENTS);
-    await dbClear(STORES.DOCUMENTS);
-    await dbClear(STORES.DRAFTS);
-
-    if (payload.settings) await dbPut(STORES.SETTINGS, payload.settings);
-    for (const product of payload.products || []) await dbPut(STORES.PRODUCTS, normalizeImportedProduct(product));
-    for (const row of payload.treatments || []) await dbPut(STORES.TREATMENTS, normalizeImportedTreatment(row));
-    for (const doc of payload.documents || []) {
-      const restored = { ...doc };
-      if (doc.dataUrl) restored.blob = dataUrlToBlob(doc.dataUrl);
-      delete restored.dataUrl;
-      await dbPut(STORES.DOCUMENTS, restored);
-    }
-  }
-
-  async function importControlledPayload(payload) {
-    const products = Array.isArray(payload.products) ? payload.products : [];
-    const treatments = Array.isArray(payload.treatments) ? payload.treatments : Array.isArray(payload.tratamientos) ? payload.tratamientos : [];
-    const documents = Array.isArray(payload.documents) ? payload.documents : [];
-
-    const productIdMap = new Map();
-    for (const product of products) {
-      const normalized = normalizeImportedProduct(product);
-      const existing = state.products.find((item) => item.id === normalized.id || item.name === normalized.name);
-      if (existing) {
-        productIdMap.set(normalized.id, existing.id);
-      } else {
-        await dbPut(STORES.PRODUCTS, normalized);
-        productIdMap.set(normalized.id, normalized.id);
-      }
-    }
-
-    for (const row of treatments) {
-      const normalized = normalizeImportedTreatment(row);
-      if (normalized.productId && productIdMap.has(normalized.productId)) {
-        normalized.productId = productIdMap.get(normalized.productId);
-      }
-      const duplicate = state.treatments.find((existing) => existing.id === normalized.id);
-      if (!duplicate) await dbPut(STORES.TREATMENTS, normalized);
-    }
-
-    for (const doc of documents) {
-      const normalized = { ...doc };
-      if (normalized.productId && productIdMap.has(normalized.productId)) {
-        normalized.productId = productIdMap.get(normalized.productId);
-      }
-      if (doc.dataUrl) normalized.blob = dataUrlToBlob(doc.dataUrl);
-      delete normalized.dataUrl;
-      const duplicate = state.documents.find((existing) => existing.id === normalized.id);
-      if (!duplicate) await dbPut(STORES.DOCUMENTS, normalized);
-    }
-  }
-
-  function normalizeImportedProduct(product) {
-    const normalized = {
-      ...blankProduct(),
-      ...product,
-      id: product.id || uid("prod"),
-      targets: Array.isArray(product.targets) ? product.targets : splitList(product.targets || ""),
-      doseRule: normalizeDoseRule(product.doseRule),
-      volumeRule: normalizeVolumeRule(product.volumeRule),
-      updatedAt: nowIso()
-    };
-    normalized.pendingFields = Array.isArray(product.pendingFields) ? product.pendingFields : inferPendingFields(normalized);
-    return normalized;
-  }
-
-  function normalizeImportedTreatment(row) {
-    return {
-      id: row.id || uid("tr"),
-      groupNo: String(row.groupNo || row.numero || row.n || nextTreatmentGroupNo()),
-      date: normalizeDateValue(row.date || row.fecha || todayIso()),
-      productId: row.productId || "",
-      productName: row.productName || row.nombreProducto || row.producto || "A verificar",
-      regNumber: row.regNumber || row.numeroRegistro || row.registro || "A verificar",
-      lot: row.lot || row.lote || "A verificar",
-      doseRecommended: row.doseRecommended || row.dosisRecomendada || "A verificar",
-      appliedDose: row.appliedDose || row.dosisAplicada || formatAppliedDose(row.appliedDoseValue, row.appliedUnit) || "A verificar",
-      appliedDoseValue: row.appliedDoseValue || "",
-      appliedUnit: row.appliedUnit || "",
-      volumeRule: row.volumeRule || row.volumenCaldo || "A verificar",
-      litersHa: row.litersHa || row.litrosHa || row.litrosHectarea || "A verificar",
-      cropUse: row.cropUse || row.cultivo || "A verificar",
-      target: row.target || row.plaga || row.patogeno || "A verificar",
-      ps: row.ps || row.plazoSeguridad || "A verificar",
-      activeIngredients: row.activeIngredients || row.principiosActivos || "A verificar",
-      mezcla: row.mezcla || "A verificar",
-      pendingFields: Array.isArray(row.pendingFields) ? row.pendingFields : detectPendingFromImportedRow(row),
-      createdAt: row.createdAt || nowIso(),
-      updatedAt: nowIso()
-    };
-  }
-
-  function detectPendingFromImportedRow(row) {
-    const fields = [];
-    for (const [field, value] of Object.entries(row || {})) {
-      if (String(value || "").toLowerCase().includes("a verificar")) fields.push(field);
-    }
-    return fields;
-  }
-
-  // ---------- Utilidades de producto / formato ----------
-  function normalizeDoseRule(rule) {
-    return {
-      mode: rule?.mode || "text",
-      unique: rule?.unique || "",
-      min: rule?.min || "",
-      max: rule?.max || "",
-      limit: rule?.limit || "",
-      unit: rule?.unit || ""
-    };
-  }
-
-  function normalizeVolumeRule(rule) {
-    return {
-      mode: rule?.mode || "range",
-      unique: rule?.unique || "",
-      min: rule?.min || "",
-      max: rule?.max || "",
-      unit: "L/ha"
-    };
-  }
-
-  function formatDoseRule(rule) {
-    const d = normalizeDoseRule(rule);
-    if (d.mode === "unique" && d.unique) return `${d.unique} ${d.unit || ""}\nÚNICO`.trim();
-    if (d.mode === "range_limit" && d.min && d.max && d.limit) return `Mín. ${d.min} ${d.unit || ""}\nMáx. ${d.max} ${d.unit || ""}\nLímite ${d.limit}`.trim();
-    if (d.mode === "range" && d.min && d.max) return `Mín. ${d.min} ${d.unit || ""}\nMáx. ${d.max} ${d.unit || ""}`.trim();
-    return "";
-  }
-
-  function formatVolumeRule(rule) {
-    if (!rule) return "A verificar";
-    const v = normalizeVolumeRule(rule);
-    if (v.mode === "unique" && v.unique) return `${v.unique} L/ha\nÚNICO`;
-    if (v.mode === "range" && v.min && v.max) return `Mín. ${v.min} L/ha\nMáx. ${v.max} L/ha`;
-    return "A verificar";
-  }
-
-  function formatAppliedDose(value, unit) {
-    const v = String(value || "").trim();
-    const u = String(unit || "").trim();
-    if (!v) return "";
-    return `${v}${u ? " " + u : ""}`;
-  }
-
-  function parseMaxApplications(value) {
-    const n = Number(String(value || "").replace(/[^\d]/g, ""));
-    return Number.isFinite(n) && n > 0 ? n : null;
-  }
-
-  // ---------- Fechas / orden ----------
-  function sortTreatments(rows) {
-    return [...rows].sort(compareTreatmentOrder).reverse();
-  }
-
-  function compareTreatmentOrder(a, b) {
-    const ad = String(a.date || "");
-    const bd = String(b.date || "");
-    if (ad !== bd) return ad.localeCompare(bd);
-    const ag = Number(a.groupNo || 0);
-    const bg = Number(b.groupNo || 0);
-    if (ag !== bg) return ag - bg;
-    return String(a.createdAt || "").localeCompare(String(b.createdAt || ""));
-  }
-
-  function sortDocs(docs) {
-    return [...docs].sort((a, b) => String(b.addedAt || "").localeCompare(String(a.addedAt || "")));
-  }
-
-  function sortByName(items, key) {
-    return [...items].sort((a, b) => String(a?.[key] || "").localeCompare(String(b?.[key] || ""), "es", { sensitivity: "base" }));
-  }
-
-  function todayIso() {
-    const now = new Date();
-    const y = now.getFullYear();
-    const m = String(now.getMonth() + 1).padStart(2, "0");
-    const d = String(now.getDate()).padStart(2, "0");
-    return `${y}-${m}-${d}`;
-  }
-
-  function nowIso() {
-    return new Date().toISOString();
-  }
-
-  function isFutureDate(date) {
-    return String(date || "") > todayIso();
-  }
-
-  function normalizeDateValue(value) {
-    if (!value) return todayIso();
-    const str = String(value);
-    const match = str.match(/^(\d{4})-(\d{2})-(\d{2})/);
-    if (match) return `${match[1]}-${match[2]}-${match[3]}`;
-    const dmy = str.match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
-    if (dmy) return `${dmy[3]}-${dmy[2]}-${dmy[1]}`;
-    return todayIso();
-  }
-
-  function formatDate(value) {
-    const normalized = normalizeDateValue(value);
-    const [y, m, d] = normalized.split("-").map(Number);
-    if (!y || !m || !d) return normalized;
-    return `${String(d).padStart(2, "0")}/${String(m).padStart(2, "0")}/${y}`;
-  }
-
-  function formatDateTime(value) {
-    if (!value) return "—";
-    try {
-      return new Intl.DateTimeFormat("es-ES", { dateStyle: "short", timeStyle: "short" }).format(new Date(value));
-    } catch {
-      return String(value);
-    }
-  }
-
-  // ---------- IndexedDB ----------
-  function openDb() {
-    return new Promise((resolve, reject) => {
-      const request = indexedDB.open(DB_NAME, DB_VERSION);
-      request.onupgradeneeded = () => {
-        const db = request.result;
-        if (!db.objectStoreNames.contains(STORES.SETTINGS)) db.createObjectStore(STORES.SETTINGS, { keyPath: "id" });
-        if (!db.objectStoreNames.contains(STORES.PRODUCTS)) db.createObjectStore(STORES.PRODUCTS, { keyPath: "id" });
-        if (!db.objectStoreNames.contains(STORES.TREATMENTS)) db.createObjectStore(STORES.TREATMENTS, { keyPath: "id" });
-        if (!db.objectStoreNames.contains(STORES.DOCUMENTS)) db.createObjectStore(STORES.DOCUMENTS, { keyPath: "id" });
-        if (!db.objectStoreNames.contains(STORES.DRAFTS)) db.createObjectStore(STORES.DRAFTS, { keyPath: "id" });
-      };
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
-    });
-  }
-
-  function dbTx(store, mode, callback) {
-    return new Promise((resolve, reject) => {
-      const tx = state.db.transaction(store, mode);
-      const os = tx.objectStore(store);
-      let request;
-      try {
-        request = callback(os);
-      } catch (error) {
-        reject(error);
-        return;
-      }
-      tx.oncomplete = () => resolve(request?.result);
-      tx.onerror = () => reject(tx.error);
-      tx.onabort = () => reject(tx.error);
-    });
-  }
-
-  function dbGet(store, key) {
-    return new Promise((resolve, reject) => {
-      const tx = state.db.transaction(store, "readonly");
-      const request = tx.objectStore(store).get(key);
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
-    });
-  }
-
-  function dbGetAll(store) {
-    return new Promise((resolve, reject) => {
-      const tx = state.db.transaction(store, "readonly");
-      const request = tx.objectStore(store).getAll();
-      request.onsuccess = () => resolve(request.result || []);
-      request.onerror = () => reject(request.error);
-    });
-  }
-
-  function dbPut(store, value) {
-    return dbTx(store, "readwrite", (os) => os.put(value));
-  }
-
-  function dbDelete(store, key) {
-    return dbTx(store, "readwrite", (os) => os.delete(key));
-  }
-
-  function dbClear(store) {
-    return dbTx(store, "readwrite", (os) => os.clear());
-  }
-
-  // ---------- Service worker ----------
-  function bindServiceWorker() {
-    if (!("serviceWorker" in navigator)) return;
-    window.addEventListener("load", async () => {
-      try {
-        const reg = await navigator.serviceWorker.register("./service-worker.js");
-        if (reg.waiting) showUpdateAvailable(reg.waiting);
-        reg.addEventListener("updatefound", () => {
-          const worker = reg.installing;
-          if (!worker) return;
-          worker.addEventListener("statechange", () => {
-            if (worker.state === "installed" && navigator.serviceWorker.controller) {
-              showUpdateAvailable(worker);
-            }
-          });
-        });
-        navigator.serviceWorker.addEventListener("controllerchange", () => window.location.reload());
-      } catch (error) {
-        console.warn("Service worker no disponible", error);
-      }
-    });
-  }
-
-  function showUpdateAvailable(worker) {
-    state.waitingWorker = worker;
-    updateBanner.classList.remove("is-hidden");
-  }
-
-  // ---------- Utilidades generales ----------
-  function toast(message) {
-    const el = document.createElement("div");
-    el.className = "toast";
-    el.textContent = message;
-    toastRoot.appendChild(el);
-    setTimeout(() => el.remove(), 3600);
-  }
-
-  function uid(prefix) {
-    if (crypto?.randomUUID) return `${prefix}_${crypto.randomUUID()}`;
-    return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
-  }
-
-  function valueOrPending(value) {
-    const text = String(value ?? "").trim();
-    return text || "A verificar";
-  }
-
-  function splitList(value) {
-    return String(value || "")
-      .split(/[,;\n]/)
-      .map((item) => item.trim())
-      .filter(Boolean);
-  }
-
-  function parseLocaleNumber(value) {
-    if (value === null || value === undefined) return null;
-    const cleaned = String(value).trim().replace(/\./g, "").replace(",", ".");
-    if (!cleaned) return null;
-    const match = cleaned.match(/-?\d+(?:\.\d+)?/);
-    if (!match) return null;
-    const n = Number(match[0]);
-    return Number.isFinite(n) ? n : null;
-  }
-
-  function extractNumbers(value) {
-    return (String(value || "").match(/\d+(?:[.,]\d+)?/g) || []).map((item) => item.replace(",", "."));
-  }
-
-  function normalizeUnit(unit) {
-    return String(unit || "")
-      .toLowerCase()
-      .replace(/\s+/g, "")
-      .replace("litros", "l")
-      .replace("ml", "cc");
-  }
-
-  function approxEqual(a, b) {
-    return Math.abs(Number(a) - Number(b)) < 0.0001;
-  }
-
-  function normalizePs(value) {
-    const txt = String(value || "").trim();
-    if (/no\s+procede/i.test(txt)) return "NO PROCEDE";
-    return txt;
-  }
-
-  function matchEvidence(text, regex) {
-    const match = text.match(regex);
-    return match ? match[0] : "";
-  }
-
-  function formatBytes(bytes) {
-    const n = Number(bytes || 0);
-    if (n < 1024) return `${n} B`;
-    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
-    return `${(n / (1024 * 1024)).toFixed(1)} MB`;
-  }
-
-  function isImageDoc(doc) {
-    return String(doc?.type || "").startsWith("image/");
-  }
-
-  function isTextDoc(doc) {
-    return String(doc?.type || "").startsWith("text/") || /\.txt$/i.test(doc?.name || "");
-  }
-
-  function guessMime(name) {
-    const lower = String(name || "").toLowerCase();
-    if (lower.endsWith(".png")) return "image/png";
-    if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
-    if (lower.endsWith(".webp")) return "image/webp";
-    if (lower.endsWith(".pdf")) return "application/pdf";
-    if (lower.endsWith(".txt")) return "text/plain";
-    return "application/octet-stream";
-  }
-
-  function downloadBlob(blob, filename) {
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 2000);
-  }
-
-  function blobToDataUrl(blob) {
-    return new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result);
-      reader.onerror = () => reject(reader.error);
-      reader.readAsDataURL(blob);
-    });
-  }
-
-  function dataUrlToBlob(dataUrl) {
-    const [meta, base64] = String(dataUrl).split(",");
-    const mime = (meta.match(/data:(.*?);base64/) || [])[1] || "application/octet-stream";
-    const binary = atob(base64 || "");
-    const arr = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i += 1) arr[i] = binary.charCodeAt(i);
-    return new Blob([arr], { type: mime });
-  }
-
-  function csvEscape(value) {
-    const text = String(value ?? "");
-    if (/[;"\n]/.test(text)) return `"${text.replace(/"/g, '""')}"`;
-    return text;
-  }
-
-  function escapeHtml(value) {
-    return String(value ?? "")
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;")
-      .replace(/'/g, "&#39;");
-  }
-
-  function escapeAttr(value) {
-    return escapeHtml(value).replace(/`/g, "&#96;");
-  }
-
-  function cssEscape(value) {
-    if (window.CSS?.escape) return window.CSS.escape(value);
-    return String(value || "").replace(/"/g, '\\"');
-  }
+  bindGlobal(); setupSW(); renderAll();
 })();
