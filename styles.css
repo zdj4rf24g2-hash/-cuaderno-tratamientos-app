@@ -342,3 +342,18 @@ html, body { width: 100%; max-width: 100%; overflow-x: hidden; }
 @media (max-width: 560px) {
   .dose-choice-card { grid-template-columns: 22px minmax(0,1fr); }
 }
+
+
+/* V2.4 · último tratamiento con todos los productos de la fecha */
+.latest-treatment-list { display: grid; gap: 10px; margin-top: 12px; }
+.latest-treatment-product { border: 1px solid var(--line); border-radius: 14px; padding: 12px; background: var(--surface); display: grid; gap: 10px; }
+.latest-treatment-product-main { display: grid; gap: 4px; min-width: 0; }
+.latest-treatment-product-main strong { font-size: 15px; line-height: 1.35; overflow-wrap: anywhere; }
+.latest-treatment-product-main small { color: var(--muted); font-size: 13px; }
+.latest-treatment-product-meta { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
+.latest-treatment-product-meta > div { display: grid; gap: 3px; border-radius: 12px; padding: 9px 10px; background: var(--surface-2); }
+.latest-treatment-product-meta span { color: var(--muted); font-size: 12px; font-weight: 700; }
+.latest-treatment-product-meta strong { font-size: 14px; line-height: 1.35; }
+@media (min-width: 520px) {
+  .latest-treatment-product-meta { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

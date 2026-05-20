@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const APP_VERSION = '2.3';
+  const APP_VERSION = '2.4';
   const SCHEMA_VERSION = '1.0.0';
   const DB_NAME = 'cuaderno-tratamientos-pwa-v1';
   const DB_STORE = 'state';
@@ -236,7 +236,7 @@
 
   function registerServiceWorker() {
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('sw.js?v=2.3', { updateViaCache: 'none' }).then(registration => registration.update()).catch(error => console.warn('SW no registrado', error));
+      navigator.serviceWorker.register('sw.js?v=2.4', { updateViaCache: 'none' }).then(registration => registration.update()).catch(error => console.warn('SW no registrado', error));
     }
   }
 
@@ -308,6 +308,7 @@
     const drafts = currentDrafts();
     const usedProducts = new Set(treatments.map(t => t.productName)).size;
     const last = treatments.slice().sort(sortTreatmentDesc)[0];
+    const lastDateRows = last ? treatments.filter(row => row.date === last.date).sort(sortTreatmentAsc) : [];
     const campaign = activeCampaign();
     return `
       <section class="section-card">
@@ -346,8 +347,9 @@
           ${last ? `
             <div class="kv-grid">
               <div class="kv"><strong>Fecha</strong><span>${formatDate(last.date)}</span></div>
-              <div class="kv"><strong>Producto</strong><span>${escapeHtml(last.productName)}</span></div>
-              <div class="kv"><strong>Dosis</strong><span>${escapeHtml(last.doseApplied || '—')}</span></div>
+            </div>
+            <div class="latest-treatment-list">
+              ${lastDateRows.map(renderLatestTreatmentProduct).join('')}
             </div>
             <div class="button-row" style="margin-top:12px"><button class="ghost-btn" data-action="go-ledger">Ver cuaderno</button></div>
           ` : renderEmpty('Sin tratamientos registrados', 'Importa la carga inicial o crea el primer tratamiento.')}
@@ -374,6 +376,42 @@
         ${alerts.length ? `<div class="button-row" style="margin-top:12px"><button class="ghost-btn" data-action="go-alerts">Ver todas</button></div>` : ''}
       </section>
     `;
+  }
+
+  function renderLatestTreatmentProduct(row) {
+    const application = latestTreatmentApplicationDisplay(row);
+    const interval = latestTreatmentIntervalDisplay(row, application);
+    return `
+      <article class="latest-treatment-product">
+        <div class="latest-treatment-product-main">
+          <strong>${escapeHtml(row.productName || '—')}</strong>
+          <small>Dosis: ${escapeHtml(row.doseApplied || '—')}</small>
+        </div>
+        <div class="latest-treatment-product-meta">
+          <div>
+            <span>Aplicación campaña</span>
+            <strong>${escapeHtml(application)}</strong>
+          </div>
+          <div>
+            <span>Plazo entre tratamientos</span>
+            <strong>${escapeHtml(interval)}</strong>
+          </div>
+        </div>
+      </article>
+    `;
+  }
+
+  function latestTreatmentApplicationDisplay(row) {
+    const display = campaignCountDisplay(row);
+    return display === '1/1' ? 'ÚNICO' : display;
+  }
+
+  function latestTreatmentIntervalDisplay(row, applicationDisplay = latestTreatmentApplicationDisplay(row)) {
+    const product = findProduct(row.productId);
+    const interval = String(product?.applicationInterval || '').trim();
+    if (interval) return interval;
+    if (applicationDisplay === 'ÚNICO') return 'No procede';
+    return '—';
   }
 
   function renderNew() {
