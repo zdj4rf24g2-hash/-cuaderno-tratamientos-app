@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const APP_VERSION = '2.4';
+  const APP_VERSION = '2.5';
   const SCHEMA_VERSION = '1.0.0';
   const DB_NAME = 'cuaderno-tratamientos-pwa-v1';
   const DB_STORE = 'state';
@@ -236,7 +236,7 @@
 
   function registerServiceWorker() {
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('sw.js?v=2.4', { updateViaCache: 'none' }).then(registration => registration.update()).catch(error => console.warn('SW no registrado', error));
+      navigator.serviceWorker.register('sw.js?v=2.5', { updateViaCache: 'none' }).then(registration => registration.update()).catch(error => console.warn('SW no registrado', error));
     }
   }
 
@@ -410,8 +410,9 @@
     const product = findProduct(row.productId);
     const interval = String(product?.applicationInterval || '').trim();
     if (interval) return interval;
-    if (applicationDisplay === 'ÚNICO') return 'No procede';
-    return '—';
+    const max = row.snapshot?.maxApplications ?? product?.maxApplications;
+    if (applicationDisplay === 'ÚNICO' || Number(max) === 1) return 'No procede';
+    return 'A verificar';
   }
 
   function renderNew() {
