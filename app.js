@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const APP_VERSION = '2.8';
+  const APP_VERSION = '2.9';
   const SCHEMA_VERSION = '1.0.0';
   const DB_NAME = 'cuaderno-tratamientos-pwa-v1';
   const DB_STORE = 'state';
@@ -236,7 +236,7 @@
 
   function registerServiceWorker() {
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('sw.js?v=2.8', { updateViaCache: 'none' }).then(registration => registration.update()).catch(error => console.warn('SW no registrado', error));
+      navigator.serviceWorker.register('sw.js?v=2.9', { updateViaCache: 'none' }).then(registration => registration.update()).catch(error => console.warn('SW no registrado', error));
     }
   }
 
@@ -970,8 +970,8 @@
     if (reviewVolumeRuleField === 'volumeRule.mode') {
       return syncReviewVolumeRulePanels(event.target.closest('[data-review-rule="volumeRule"]'), event.target.value || '');
     }
-    if (event.target.id === 'editProductVolumeMode') {
-      return syncEditProductVolumePanels(event.target.value || '');
+    if (event.target.matches('[data-edit-volume-ui-mode]')) {
+      return syncEditProductVolumePanels(event.target.closest('[data-edit-volume-editor]'));
     }
   }
 
@@ -1882,23 +1882,7 @@
       </div>
       <div class="field"><span>Unidad límite por ha</span><input id="editDosePerHaLimitUnit" value="${escapeAttr(doseRule.perHaLimitUnit || '')}" placeholder="kg/ha o L/ha"></div>
       <hr class="separator">
-      <div class="field"><span>Volumen caldo</span><textarea id="editProductVolumeReference" placeholder="Texto visible en cuaderno">${escapeHtml(product.volumeReference || '')}</textarea></div>
-      <div class="field"><span>Tipo de volumen caldo</span><select id="editProductVolumeMode">${renderSimpleOptions([
-        ['pending', 'A verificar'],
-        ['fixed', 'Volumen único'],
-        ['range', 'Volumen mínimo y máximo'],
-        ['not_listed', 'NO CONSTA en la fuente']
-      ], volumeRule.mode || 'pending')}</select></div>
-      <p class="muted compact-note">Unidad fija para volumen: <strong>L/ha</strong>.</p>
-      <div id="editVolumeFixedPanel" class="${volumeRule.mode === 'fixed' ? '' : 'hidden'}">
-        <div class="field"><span>Volumen único</span><input id="editVolumeValue" value="${escapeAttr(ruleInputValue(volumeRule.value))}" inputmode="decimal" placeholder="L/ha"></div>
-      </div>
-      <div id="editVolumeRangePanel" class="${volumeRule.mode === 'range' ? '' : 'hidden'}">
-        <div class="inline-fields two">
-          <div class="field"><span>Volumen mínimo</span><input id="editVolumeMin" value="${escapeAttr(ruleInputValue(volumeRule.min))}" inputmode="decimal" placeholder="L/ha"></div>
-          <div class="field"><span>Volumen máximo</span><input id="editVolumeMax" value="${escapeAttr(ruleInputValue(volumeRule.max))}" inputmode="decimal" placeholder="L/ha"></div>
-        </div>
-      </div>
+      ${renderEditProductVolumeEditor(product, volumeRule)}
       <div class="inline-fields two">
         <div class="field"><span>Cultivo / usos autorizados</span><textarea id="editProductAllowedUses" placeholder="Uno por línea">${escapeHtml((product.allowedUses || []).join('\n'))}</textarea></div>
         <div class="field"><span>Plagas / objetivos autorizados</span><textarea id="editProductAllowedObjectives" placeholder="Uno por línea">${escapeHtml((product.allowedObjectives || []).join('\n'))}</textarea></div>
@@ -1948,7 +1932,7 @@
     const read = id => document.getElementById(id)?.value?.trim() ?? '';
     const verificationStatus = read('editProductVerificationStatus') || product.verificationStatus || 'PENDING';
     const doseMode = read('editProductDoseMode') || 'pending';
-    const volumeMode = read('editProductVolumeMode') || 'pending';
+    const editVolume = readEditProductVolumePayload();
     return {
       registration: read('editProductRegistration'),
       verificationStatus,
@@ -1963,13 +1947,8 @@
         perHaLimit: readNumericEdit('editDosePerHaLimit'),
         perHaLimitUnit: read('editDosePerHaLimitUnit')
       }),
-      volumeReference: read('editProductVolumeReference'),
-      volumeRule: buildVolumeRuleFromEdit({
-        mode: volumeMode,
-        value: readNumericEdit('editVolumeValue'),
-        min: readNumericEdit('editVolumeMin'),
-        max: readNumericEdit('editVolumeMax')
-      }),
+      volumeReference: editVolume.reference,
+      volumeRule: editVolume.rule,
       allowedUses: parseLinesInput(read('editProductAllowedUses')),
       allowedObjectives: parseLinesInput(read('editProductAllowedObjectives')),
       applicationInterval: read('editProductApplicationInterval'),
@@ -3551,9 +3530,153 @@ ${text}`);
     container.querySelector('[data-review-volume-rule-panel="volumeRule.range"]')?.classList.toggle('hidden', mode !== 'range');
   }
 
-  function syncEditProductVolumePanels(mode) {
-    document.getElementById('editVolumeFixedPanel')?.classList.toggle('hidden', mode !== 'fixed');
-    document.getElementById('editVolumeRangePanel')?.classList.toggle('hidden', mode !== 'range');
+  function renderEditProductVolumeEditor(product, volumeRule) {
+    const preset = normalizeEditProductVolumePreset(product?.volumeReference, volumeRule);
+    return `
+      <div class="dose-review-editor" data-edit-volume-editor>
+        <div class="dose-review-info"><strong>Volumen caldo.</strong> El texto visible y la regla de validación se generan automáticamente a partir de esta selección.</div>
+        <div class="dose-review-stephead">
+          <span class="step-badge">1</span>
+          <div>
+            <strong>¿Qué indica la ficha o la documentación sobre el volumen?</strong>
+            <p>Unidad fija: <strong>L/ha</strong>.</p>
+          </div>
+        </div>
+        <div class="dose-choice-list">
+          <label class="dose-choice-card ${preset.uiMode === 'pending' ? 'selected' : ''}">
+            <input type="radio" name="editVolumeUiMode" data-edit-volume-ui-mode value="pending" ${preset.uiMode === 'pending' ? 'checked' : ''}>
+            <div>
+              <strong>A verificar</strong>
+              <small>El volumen aún no está confirmado.</small>
+            </div>
+          </label>
+          <label class="dose-choice-card ${preset.uiMode === 'fixed' ? 'selected' : ''}">
+            <input type="radio" name="editVolumeUiMode" data-edit-volume-ui-mode value="fixed" ${preset.uiMode === 'fixed' ? 'checked' : ''}>
+            <div>
+              <strong>Volumen único</strong>
+              <small>La etiqueta fija un único volumen de caldo por hectárea.</small>
+            </div>
+          </label>
+          <label class="dose-choice-card ${preset.uiMode === 'range' ? 'selected' : ''}">
+            <input type="radio" name="editVolumeUiMode" data-edit-volume-ui-mode value="range" ${preset.uiMode === 'range' ? 'checked' : ''}>
+            <div>
+              <strong>Volumen mínimo – máximo</strong>
+              <small>La etiqueta fija un mínimo y un máximo por hectárea.</small>
+            </div>
+          </label>
+          <label class="dose-choice-card ${preset.uiMode === 'not_listed' ? 'selected' : ''}">
+            <input type="radio" name="editVolumeUiMode" data-edit-volume-ui-mode value="not_listed" ${preset.uiMode === 'not_listed' ? 'checked' : ''}>
+            <div>
+              <strong>No consta</strong>
+              <small>La documentación no indica volumen de caldo para este uso.</small>
+            </div>
+          </label>
+        </div>
+        <div class="dose-review-stephead secondary">
+          <span class="step-badge">2</span>
+          <div>
+            <strong>Introduce los datos</strong>
+            <p>Solo se muestran los campos necesarios según la opción elegida.</p>
+          </div>
+        </div>
+        <div class="dose-review-note">La regla de validación de volumen se genera automáticamente; no se introduce por separado.</div>
+
+        <section class="dose-panel ${preset.uiMode === 'fixed' ? '' : 'hidden'}" data-edit-volume-panel="fixed">
+          <h4>Volumen único</h4>
+          <div class="field"><span>Volumen único</span><input data-edit-volume-field="value" value="${escapeAttr(ruleInputValue(preset.value))}" inputmode="decimal" placeholder="Ej. 400"></div>
+        </section>
+
+        <section class="dose-panel ${preset.uiMode === 'range' ? '' : 'hidden'}" data-edit-volume-panel="range">
+          <h4>Volumen mínimo – máximo</h4>
+          <div class="inline-fields two">
+            <div class="field"><span>Volumen mínimo</span><input data-edit-volume-field="min" value="${escapeAttr(ruleInputValue(preset.min))}" inputmode="decimal" placeholder="Ej. 200"></div>
+            <div class="field"><span>Volumen máximo</span><input data-edit-volume-field="max" value="${escapeAttr(ruleInputValue(preset.max))}" inputmode="decimal" placeholder="Ej. 1200"></div>
+          </div>
+        </section>
+      </div>
+    `;
+  }
+
+  function normalizeEditProductVolumePreset(volumeReference, volumeRule) {
+    const preset = { uiMode: 'pending', value: '', min: '', max: '' };
+    const rule = volumeRule && typeof volumeRule === 'object' ? volumeRule : { mode: 'pending' };
+    if (rule.mode === 'fixed') {
+      preset.uiMode = 'fixed';
+      preset.value = ruleInputValue(rule.value);
+      return preset;
+    }
+    if (rule.mode === 'range') {
+      preset.uiMode = 'range';
+      preset.min = ruleInputValue(rule.min);
+      preset.max = ruleInputValue(rule.max);
+      return preset;
+    }
+    if (rule.mode === 'not_listed') {
+      preset.uiMode = 'not_listed';
+      return preset;
+    }
+    const normalized = String(volumeReference || '').replace(/\s+/g, ' ').replace(/,/g, '.').trim();
+    if (/NO\s+CONSTA/i.test(normalized)) {
+      preset.uiMode = 'not_listed';
+      return preset;
+    }
+    const range = normalized.match(/M[IÍ]N\.?\s*(\d+(?:\.\d+)?)\s*L\s*\/\s*HA.*M[ÁA]X\.?\s*(\d+(?:\.\d+)?)\s*L\s*\/\s*HA/i)
+      || normalized.match(/(\d+(?:\.\d+)?)\s*(?:-|–|A)\s*(\d+(?:\.\d+)?)\s*L\s*\/\s*HA/i);
+    if (range) {
+      preset.uiMode = 'range';
+      preset.min = range[1];
+      preset.max = range[2];
+      return preset;
+    }
+    const fixed = normalized.match(/(\d+(?:\.\d+)?)\s*L\s*\/\s*HA/i);
+    if (fixed) {
+      preset.uiMode = 'fixed';
+      preset.value = fixed[1];
+    }
+    return preset;
+  }
+
+  function getSelectedEditVolumeMode(root = document) {
+    return root?.querySelector('[data-edit-volume-ui-mode]:checked')?.value || 'pending';
+  }
+
+  function syncEditProductVolumePanels(container) {
+    if (!container) return;
+    const mode = getSelectedEditVolumeMode(container);
+    container.querySelectorAll('.dose-choice-card').forEach(card => {
+      const input = card.querySelector('[data-edit-volume-ui-mode]');
+      if (input) card.classList.toggle('selected', !!input.checked);
+    });
+    container.querySelector('[data-edit-volume-panel="fixed"]')?.classList.toggle('hidden', mode !== 'fixed');
+    container.querySelector('[data-edit-volume-panel="range"]')?.classList.toggle('hidden', mode !== 'range');
+  }
+
+  function readEditProductVolumePayload() {
+    const root = document.querySelector('[data-edit-volume-editor]');
+    const mode = getSelectedEditVolumeMode(root);
+    const readNumeric = key => {
+      const raw = root?.querySelector(`[data-edit-volume-field="${cssEscapeValue(key)}"]`)?.value?.trim() || '';
+      if (!raw) return null;
+      const value = Number(normalizeNumericString(raw));
+      return Number.isFinite(value) ? value : null;
+    };
+    if (mode === 'not_listed') return { reference: 'NO CONSTA', rule: { mode: 'not_listed' } };
+    if (mode === 'fixed') {
+      const value = readNumeric('value');
+      return {
+        reference: Number.isFinite(value) ? `${formatDocNumber(value)} L/ha\nÚNICO` : '',
+        rule: buildVolumeRuleFromEdit({ mode, value })
+      };
+    }
+    if (mode === 'range') {
+      const min = readNumeric('min');
+      const max = readNumeric('max');
+      return {
+        reference: Number.isFinite(min) && Number.isFinite(max) ? `Mín. ${formatDocNumber(min)} L/ha\nMáx. ${formatDocNumber(max)} L/ha` : '',
+        rule: buildVolumeRuleFromEdit({ mode, min, max })
+      };
+    }
+    return { reference: 'A verificar', rule: { mode: 'pending' } };
   }
 
   function collectDocumentReviewPayload(product, suggestions) {
