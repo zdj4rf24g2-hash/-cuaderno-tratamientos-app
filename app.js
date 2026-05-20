@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const APP_VERSION = '2.5';
+  const APP_VERSION = '2.6';
   const SCHEMA_VERSION = '1.0.0';
   const DB_NAME = 'cuaderno-tratamientos-pwa-v1';
   const DB_STORE = 'state';
@@ -236,7 +236,7 @@
 
   function registerServiceWorker() {
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('sw.js?v=2.5', { updateViaCache: 'none' }).then(registration => registration.update()).catch(error => console.warn('SW no registrado', error));
+      navigator.serviceWorker.register('sw.js?v=2.6', { updateViaCache: 'none' }).then(registration => registration.update()).catch(error => console.warn('SW no registrado', error));
     }
   }
 
@@ -345,13 +345,21 @@
         <article class="section-card">
           <h2>Último tratamiento</h2>
           ${last ? `
-            <div class="kv-grid">
-              <div class="kv"><strong>Fecha</strong><span>${formatDate(last.date)}</span></div>
+            <div class="latest-treatment-date-row">
+              <strong>Fecha</strong>
+              <span>${formatDate(last.date)}</span>
             </div>
-            <div class="latest-treatment-list">
-              ${lastDateRows.map(renderLatestTreatmentProduct).join('')}
+            <div class="latest-treatment-table" role="table" aria-label="Productos del último tratamiento">
+              <div class="latest-treatment-table-head" role="row">
+                <strong role="columnheader">Producto</strong>
+                <strong role="columnheader">Dosis</strong>
+                <strong role="columnheader">Aplicación campaña</strong>
+                <strong role="columnheader">Plazo entre tratamientos</strong>
+              </div>
+              <div class="latest-treatment-list">
+                ${lastDateRows.map(renderLatestTreatmentProduct).join('')}
+              </div>
             </div>
-            <div class="button-row" style="margin-top:12px"><button class="ghost-btn" data-action="go-ledger">Ver cuaderno</button></div>
           ` : renderEmpty('Sin tratamientos registrados', 'Importa la carga inicial o crea el primer tratamiento.')}
         </article>
 
@@ -382,22 +390,12 @@
     const application = latestTreatmentApplicationDisplay(row);
     const interval = latestTreatmentIntervalDisplay(row, application);
     return `
-      <article class="latest-treatment-product">
-        <div class="latest-treatment-product-main">
-          <strong>${escapeHtml(row.productName || '—')}</strong>
-          <small>Dosis: ${escapeHtml(row.doseApplied || '—')}</small>
-        </div>
-        <div class="latest-treatment-product-meta">
-          <div>
-            <span>Aplicación campaña</span>
-            <strong>${escapeHtml(application)}</strong>
-          </div>
-          <div>
-            <span>Plazo entre tratamientos</span>
-            <strong>${escapeHtml(interval)}</strong>
-          </div>
-        </div>
-      </article>
+      <div class="latest-treatment-row" role="row">
+        <strong class="latest-treatment-product-name" role="cell">${escapeHtml(row.productName || '—')}</strong>
+        <span class="latest-treatment-dose" role="cell">${escapeHtml(row.doseApplied || '—')}</span>
+        <strong class="latest-treatment-application" role="cell">${escapeHtml(application)}</strong>
+        <strong class="latest-treatment-interval" role="cell">${escapeHtml(interval)}</strong>
+      </div>
     `;
   }
 
