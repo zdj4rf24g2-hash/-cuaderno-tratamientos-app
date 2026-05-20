@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const APP_VERSION = '2.6';
+  const APP_VERSION = '2.7';
   const SCHEMA_VERSION = '1.0.0';
   const DB_NAME = 'cuaderno-tratamientos-pwa-v1';
   const DB_STORE = 'state';
@@ -236,7 +236,7 @@
 
   function registerServiceWorker() {
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('sw.js?v=2.6', { updateViaCache: 'none' }).then(registration => registration.update()).catch(error => console.warn('SW no registrado', error));
+      navigator.serviceWorker.register('sw.js?v=2.7', { updateViaCache: 'none' }).then(registration => registration.update()).catch(error => console.warn('SW no registrado', error));
     }
   }
 
@@ -714,7 +714,7 @@
 
   function renderResolvedAlertCard(alert) {
     return `
-      <article class="alert-card" style="border-left-color:#9ab7c2">
+      <article class="alert-card" style="border-left-color:#a9bfd6">
         <div class="section-header">
           <div>
             <h3>${escapeHtml(alert.title || alert.type)}</h3>
@@ -3764,13 +3764,13 @@ ${text}`);
       .pdf-title { text-align:center; font-size:16px; font-weight:700; margin-bottom:8px; }
       .pdf-applicator { font-size:11px; font-weight:700; text-decoration:underline; margin-bottom:8px; }
       table { width:100%; border-collapse:collapse; table-layout:fixed; }
-      th, td { border:1px solid #9fb3bf; padding:3px; font-size:7px; white-space:pre-line; word-break:break-word; text-align:center; vertical-align:top; }
-      th { background:#155e75; color:#fff; }
+      th, td { border:1px solid #a9bfd6; padding:3px; font-size:7px; white-space:pre-line; word-break:break-word; text-align:center; vertical-align:top; }
+      th { background:#1f5c98; color:#fff; }
       td.warning-cell { background:#fde8e8; color:#7d1d1d; font-weight:700; }
       h1 { text-align:center; font-size:18px; }
-      h2 { font-size:14px; border-bottom:1px solid #cbd5e1; padding-bottom:4px; }
+      h2 { font-size:14px; border-bottom:1px solid #d5e0eb; padding-bottom:4px; }
       li { margin-bottom:6px; }
-      .caption { font-size:9px; color:#475569; }
+      .caption { font-size:9px; color:#66798e; }
       .scroll-table { overflow:visible; }
     </style></head><body><h1>${escapeHtml(title)}</h1>${body}</body></html>`;
   }
