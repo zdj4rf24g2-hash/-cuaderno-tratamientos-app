@@ -309,3 +309,36 @@ td.text-left { text-align: left; }
 /* V 1.8 · visor interno ampliado de imágenes documentales */
 .image-zoom-preview { padding: 8px; }
 .image-zoom-preview img { max-height: 72vh; width: 100%; object-fit: contain; }
+
+/* Ajuste V 2.1 · importación sin desbordamiento lateral en iPhone */
+html, body { width: 100%; max-width: 100%; overflow-x: hidden; }
+.screen, .section-card, .section-header, .section-header > div, .metric-grid, .button-row { min-width: 0; max-width: 100%; }
+.section-header > div { flex: 1 1 auto; }
+.section-header p, .section-card p, .muted, .hint, .caption { overflow-wrap: anywhere; word-break: break-word; }
+.button-row > button, .button-row > .primary-btn, .button-row > .secondary-btn, .button-row > .ghost-btn { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+@media (max-width: 719px) {
+  .button-row { display: grid; grid-template-columns: minmax(0, 1fr); }
+  .button-row > button, .button-row > .primary-btn, .button-row > .secondary-btn, .button-row > .ghost-btn { width: 100%; }
+}
+
+
+
+/* V2.2 · revisión simplificada de dosis */
+.dose-review-editor { display: grid; gap: 14px; }
+.dose-review-info { background: #eef7ff; color: var(--ink); border-radius: 12px; padding: 12px 14px; }
+.dose-review-stephead { display: grid; grid-template-columns: 34px minmax(0,1fr); gap: 10px; align-items: start; }
+.dose-review-stephead p { margin: 4px 0 0; color: var(--muted); }
+.step-badge { width: 30px; height: 30px; border-radius: 999px; background: #2680eb; color: #fff; display: grid; place-items: center; font-weight: 800; }
+.dose-choice-list { display: grid; gap: 10px; }
+.dose-choice-card { display: grid; grid-template-columns: 22px minmax(0,1fr); gap: 12px; align-items: start; border: 1px solid var(--line); border-radius: 16px; padding: 14px; background: #fff; }
+.dose-choice-card.selected { border-color: #2680eb; background: #f7fbff; box-shadow: inset 0 0 0 1px rgba(38,128,235,.12); }
+.dose-choice-card input { margin-top: 4px; width: 18px; height: 18px; }
+.dose-choice-card strong { display: block; font-size: 15px; margin-bottom: 3px; }
+.dose-choice-card small { color: var(--muted); display: block; line-height: 1.35; }
+.dose-review-note { background: #eef7ff; color: var(--brand); border-radius: 12px; padding: 10px 12px; font-weight: 600; }
+.dose-panel { border: 1px solid var(--line); border-radius: 16px; padding: 14px; background: #fff; }
+.dose-panel h4 { margin: 0 0 12px; font-size: 16px; }
+.dose-auto-note .input-like { min-height: 46px; display: flex; align-items: center; padding: 0 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface-2); color: var(--muted); }
+@media (max-width: 560px) {
+  .dose-choice-card { grid-template-columns: 22px minmax(0,1fr); }
+}

@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const APP_VERSION = '2.0';
+  const APP_VERSION = '2.3';
   const SCHEMA_VERSION = '1.0.0';
   const DB_NAME = 'cuaderno-tratamientos-pwa-v1';
   const DB_STORE = 'state';
@@ -236,7 +236,7 @@
 
   function registerServiceWorker() {
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('sw.js?v=2.0').then(registration => registration.update()).catch(error => console.warn('SW no registrado', error));
+      navigator.serviceWorker.register('sw.js?v=2.3', { updateViaCache: 'none' }).then(registration => registration.update()).catch(error => console.warn('SW no registrado', error));
     }
   }
 
@@ -919,6 +919,9 @@
   }
 
   function handleModalHostChange(event) {
+    if (event.target.matches('[data-dose-ui-mode], [data-dose-fixed-unit], [data-dose-range-unit], [data-dose-concentration-kind], [data-dose-concentration-unit]')) {
+      return syncReviewDoseRulePanels(event.target.closest('[data-dose-review-editor]'));
+    }
     const reviewVolumeField = event.target.dataset.reviewVolumeField;
     if (reviewVolumeField === 'volumeReference.mode') {
       return syncReviewVolumeReferencePanels(event.target.closest('[data-review-volume-editor="volumeReference"]'), event.target.value || '');
@@ -1327,6 +1330,13 @@
         if (!nearlyEqual(normalized.ruleValue, expected)) messages.push(`Dosis distinta de la dosis única: ${normalized.ruleValue ?? dose.value} frente a ${expected} ${rule.displayUnit}.`);
         break;
       }
+      case 'range': {
+        const comparable = doseToComparableValue(dose, rule.displayUnit);
+        if (!Number.isFinite(comparable) || comparable < rule.min || comparable > rule.max) {
+          messages.push(`Dosis fuera de rango: ${formatDecimal(comparable)} ${rule.displayUnit} frente a ${rule.min}-${rule.max} ${rule.displayUnit}.`);
+        }
+        break;
+      }
       case 'concentration_range_with_ha_limit': {
         const concPercent = doseToPercentPer100L(dose, liters);
         const perHa = doseToPerHaValue(dose, rule.perHaLimitUnit);
@@ -1419,6 +1429,29 @@
       if (dose.unit === 'cc/ha') return dose.value / 1000;
     }
     return NaN;
+  }
+
+  function doseToComparableValue(dose, displayUnit) {
+    if (!dose) return NaN;
+    const display = normalizeUnit(displayUnit);
+    if (display === 'kg/ha') {
+      if (dose.unit === 'kg/ha') return dose.value;
+      if (dose.unit === 'g/ha') return dose.value / 1000;
+    }
+    if (display === 'l/ha') {
+      if (dose.unit === 'l/ha') return dose.value;
+      if (dose.unit === 'cc/ha') return dose.value / 1000;
+    }
+    if (display === 'g/ha') {
+      if (dose.unit === 'g/ha') return dose.value;
+      if (dose.unit === 'kg/ha') return dose.value * 1000;
+    }
+    if (display === 'cc/ha') {
+      if (dose.unit === 'cc/ha') return dose.value;
+      if (dose.unit === 'l/ha') return dose.value * 1000;
+    }
+    if (display === '%') return dose.unit === '%' ? dose.value : NaN;
+    return doseToDeclaredConcentration(dose, displayUnit);
   }
 
   function doseToPercentPer100L(dose, litersPerHa) {
@@ -1789,6 +1822,7 @@
       <div class="field"><span>Tipo de regla de dosis para validación</span><select id="editProductDoseMode">${renderSimpleOptions([
         ['pending', 'A verificar'],
         ['fixed', 'Dosis única por ha'],
+        ['range', 'Rango mínimo–máximo por ha'],
         ['concentration_range_with_ha_limit', 'Rango % + límite por ha'],
         ['concentration_hl_range_with_ha_limit', 'Rango g/hL o cc/hL + límite por ha'],
         ['concentration_fixed_with_ha_limit', 'Concentración % única + límite por ha'],
@@ -1917,6 +1951,7 @@
     };
     if (base.mode === 'pending') return { mode: 'pending' };
     if (base.mode === 'fixed') return { ...base, value: input.value };
+    if (base.mode === 'range') return { ...base, min: input.min, max: input.max };
     if (base.mode === 'concentration_range_with_ha_limit' || base.mode === 'concentration_hl_range_with_ha_limit') {
       return { ...base, min: input.min, max: input.max, perHaLimit: input.perHaLimit, perHaLimitUnit: input.perHaLimitUnit || '' };
     }
@@ -1967,6 +2002,7 @@
     if (!rule.displayUnit) errors.push('Indica la unidad visible de la regla de dosis.');
     if (!rule.expectedAppliedUnit) errors.push('Indica la unidad esperada para la dosis aplicada.');
     if (rule.mode === 'fixed' && !hasNumber(rule.value)) errors.push('La dosis única necesita un valor numérico.');
+    if (rule.mode === 'range' && (!hasNumber(rule.min) || !hasNumber(rule.max))) errors.push('El rango por hectárea necesita mínimo y máximo numéricos.');
     if ((rule.mode === 'concentration_range_with_ha_limit' || rule.mode === 'concentration_hl_range_with_ha_limit' || rule.mode === 'concentration_hl_range') && (!hasNumber(rule.min) || !hasNumber(rule.max))) {
       errors.push('La regla de rango necesita mínimo y máximo numéricos.');
     }
@@ -2765,7 +2801,11 @@ ${text}`);
     if (Array.isArray(value)) return value.join(' · ');
     if (value && typeof value === 'object') {
       if (value.mode === 'fixed') return `${formatDocNumber(value.value)} ${value.displayUnit || value.expectedAppliedUnit || value.unit || ''}`.trim();
-      if (value.mode === 'range') return `${formatDocNumber(value.min)}–${formatDocNumber(value.max)} ${value.unit || ''}`.trim();
+      if (value.mode === 'range') return `${formatDocNumber(value.min)}–${formatDocNumber(value.max)} ${value.displayUnit || value.expectedAppliedUnit || value.unit || ''}`.trim();
+      if (value.mode === 'concentration_range_with_ha_limit') return `${formatDocNumber(value.min)}–${formatDocNumber(value.max)} % · límite ${formatDocNumber(value.perHaLimit)} ${value.perHaLimitUnit || ''}`.trim();
+      if (value.mode === 'concentration_hl_range_with_ha_limit') return `${formatDocNumber(value.min)}–${formatDocNumber(value.max)} ${value.displayUnit || ''} · límite ${formatDocNumber(value.perHaLimit)} ${value.perHaLimitUnit || ''}`.trim();
+      if (value.mode === 'concentration_fixed_with_ha_limit') return `${formatDocNumber(value.value)} % · límite ${formatDocNumber(value.perHaLimit)} ${value.perHaLimitUnit || ''}`.trim();
+      if (value.mode === 'concentration_hl_range') return `${formatDocNumber(value.min)}–${formatDocNumber(value.max)} ${value.displayUnit || ''}`.trim();
       return JSON.stringify(value);
     }
     return trimText(String(value ?? ''), 120);
@@ -3075,33 +3115,255 @@ ${text}`);
   }
 
   function renderDocumentReviewDoseRuleEditor(suggestion) {
+    const preset = normalizeDoseReviewSuggestion(suggestion);
     return `
-      <div class="review-rule-editor" data-review-rule="doseRule">
-        <div class="field"><span>Tipo de regla de dosis</span><select data-review-rule-field="doseRule.mode">${renderSimpleOptions([
-          ['', 'Usar propuesta automática / no cambiar'],
-          ['pending', 'A verificar'],
-          ['fixed', 'Dosis única por ha'],
-          ['concentration_range_with_ha_limit', 'Rango % + límite por ha'],
-          ['concentration_hl_range_with_ha_limit', 'Rango g/hL o cc/hL + límite por ha'],
-          ['concentration_fixed_with_ha_limit', 'Concentración % única + límite por ha'],
-          ['concentration_hl_range', 'Rango g/hL o cc/hL sin límite por ha']
-        ], '')}</select></div>
-        <div class="inline-fields two">
-          <div class="field"><span>Unidad visible</span><input data-review-rule-field="doseRule.displayUnit" placeholder="kg/ha, %, g/hL, cc/hL"></div>
-          <div class="field"><span>Unidad aplicada esperada</span><input data-review-rule-field="doseRule.expectedAppliedUnit" placeholder="kg/ha, cc/ha, g/hL"></div>
+      <div class="dose-review-editor" data-dose-review-editor>
+        <div class="dose-review-info"><strong>Revisa la dosis indicada en la etiqueta y completa solo lo necesario.</strong></div>
+        <div class="dose-review-stephead">
+          <span class="step-badge">1</span>
+          <div>
+            <strong>¿Qué indica la etiqueta sobre la dosis?</strong>
+            <p>Elige el tipo de información disponible.</p>
+          </div>
         </div>
-        <div class="inline-fields two">
-          <div class="field"><span>Valor único</span><input data-review-rule-field="doseRule.value" inputmode="decimal" placeholder="Solo si es dosis única"></div>
-          <div class="field"><span>Mínimo</span><input data-review-rule-field="doseRule.min" inputmode="decimal" placeholder="Solo si hay rango"></div>
+        <div class="dose-choice-list">
+          <label class="dose-choice-card ${preset.uiMode === 'fixed' ? 'selected' : ''}">
+            <input type="radio" name="doseRuleUiMode" data-dose-ui-mode value="fixed" ${preset.uiMode === 'fixed' ? 'checked' : ''}>
+            <div>
+              <strong>Dosis única por ha</strong>
+              <small>Indica un único valor por hectárea.</small>
+            </div>
+          </label>
+          <label class="dose-choice-card ${preset.uiMode === 'range' ? 'selected' : ''}">
+            <input type="radio" name="doseRuleUiMode" data-dose-ui-mode value="range" ${preset.uiMode === 'range' ? 'checked' : ''}>
+            <div>
+              <strong>Rango mínimo – máximo por ha</strong>
+              <small>Indica un mínimo y un máximo por hectárea.</small>
+            </div>
+          </label>
+          <label class="dose-choice-card ${preset.uiMode === 'concentration' ? 'selected' : ''}">
+            <input type="radio" name="doseRuleUiMode" data-dose-ui-mode value="concentration" ${preset.uiMode === 'concentration' ? 'checked' : ''}>
+            <div>
+              <strong>Concentración + límite por ha</strong>
+              <small>Indica concentración de caldo y límite por hectárea.</small>
+            </div>
+          </label>
         </div>
-        <div class="inline-fields two">
-          <div class="field"><span>Máximo</span><input data-review-rule-field="doseRule.max" inputmode="decimal" placeholder="Solo si hay rango"></div>
-          <div class="field"><span>Límite por ha</span><input data-review-rule-field="doseRule.perHaLimit" inputmode="decimal" placeholder="Si consta"></div>
+        <div class="dose-review-stephead secondary">
+          <span class="step-badge">2</span>
+          <div>
+            <strong>Introduce los datos</strong>
+            <p>Solo se muestran los campos necesarios según la opción elegida.</p>
+          </div>
         </div>
-        <div class="field"><span>Unidad límite por ha</span><input data-review-rule-field="doseRule.perHaLimitUnit" placeholder="kg/ha o L/ha"></div>
+        <div class="dose-review-note">Todos los valores deben referirse a hectárea (ha).</div>
+
+        <section class="dose-panel ${preset.uiMode === 'fixed' ? '' : 'hidden'}" data-dose-panel="fixed">
+          <h4>Dosis única por ha</h4>
+          <div class="inline-fields two">
+            <div class="field"><span>Valor</span><input data-review-rule-field="doseRule.value" value="${escapeAttr(ruleInputValue(preset.fixedValue))}" inputmode="decimal" placeholder="Ej. 2,5"></div>
+            <div class="field"><span>Unidad</span><select data-review-rule-field="doseRule.displayUnit" data-dose-fixed-unit>${renderSimpleOptions([
+              ['kg/ha','kg/ha'], ['L/ha','L/ha']
+            ], preset.fixedUnit || 'kg/ha')}</select></div>
+          </div>
+          <input type="hidden" data-review-rule-field="doseRule.expectedAppliedUnit" value="${escapeAttr(preset.fixedExpectedUnit || preset.fixedUnit || 'kg/ha')}">
+        </section>
+
+        <section class="dose-panel ${preset.uiMode === 'range' ? '' : 'hidden'}" data-dose-panel="range">
+          <h4>Rango por ha</h4>
+          <div class="inline-fields two">
+            <div class="field"><span>Mínimo</span><input data-review-rule-field="doseRule.min" value="${escapeAttr(ruleInputValue(preset.rangeMin))}" inputmode="decimal" placeholder="Ej. 2"></div>
+            <div class="field"><span>Máximo</span><input data-review-rule-field="doseRule.max" value="${escapeAttr(ruleInputValue(preset.rangeMax))}" inputmode="decimal" placeholder="Ej. 3"></div>
+          </div>
+          <div class="field"><span>Unidad</span><select data-review-rule-field="doseRule.displayUnit" data-dose-range-unit>${renderSimpleOptions([
+            ['kg/ha','kg/ha'], ['L/ha','L/ha']
+          ], preset.rangeUnit || 'kg/ha')}</select></div>
+          <input type="hidden" data-review-rule-field="doseRule.expectedAppliedUnit" value="${escapeAttr(preset.rangeExpectedUnit || preset.rangeUnit || 'kg/ha')}">
+        </section>
+
+        <section class="dose-panel ${preset.uiMode === 'concentration' ? '' : 'hidden'}" data-dose-panel="concentration">
+          <h4>Concentración + límite por ha</h4>
+          <div class="inline-fields two">
+            <div class="field"><span>Tipo de concentración</span><select data-dose-concentration-kind>${renderSimpleOptions([
+              ['fixed','Concentración única'], ['range','Rango de concentración']
+            ], preset.concentrationKind || 'range')}</select></div>
+            <div class="field"><span>Unidad visible</span><select data-dose-concentration-unit>${renderSimpleOptions([
+              ['%','%'], ['g/hL','g/hL'], ['cc/hL','cc/hL']
+            ], preset.concentrationUnit || '%')}</select></div>
+          </div>
+          <div class="inline-fields two ${preset.concentrationKind === 'fixed' ? '' : 'hidden'}" data-dose-concentration-panel="fixed">
+            <div class="field"><span>Valor único</span><input data-review-rule-field="doseRule.value" value="${escapeAttr(ruleInputValue(preset.concentrationValue))}" inputmode="decimal" placeholder="Ej. 0,25"></div>
+            <div class="field"><span>Límite por ha</span><input data-review-rule-field="doseRule.perHaLimit" value="${escapeAttr(ruleInputValue(preset.perHaLimit))}" inputmode="decimal" placeholder="Si consta"></div>
+          </div>
+          <div class="inline-fields two ${preset.concentrationKind === 'range' ? '' : 'hidden'}" data-dose-concentration-panel="range">
+            <div class="field"><span>Mínimo</span><input data-review-rule-field="doseRule.min" value="${escapeAttr(ruleInputValue(preset.concentrationMin))}" inputmode="decimal" placeholder="Ej. 0,2"></div>
+            <div class="field"><span>Máximo</span><input data-review-rule-field="doseRule.max" value="${escapeAttr(ruleInputValue(preset.concentrationMax))}" inputmode="decimal" placeholder="Ej. 0,3"></div>
+          </div>
+          <div class="inline-fields two ${preset.concentrationKind === 'range' ? '' : 'hidden'}" data-dose-concentration-panel="rangeLimit">
+            <div class="field"><span>Límite por ha</span><input data-review-rule-field="doseRule.perHaLimit" value="${escapeAttr(ruleInputValue(preset.perHaLimit))}" inputmode="decimal" placeholder="Si consta"></div>
+            <div class="field"><span>Unidad límite por ha</span><select data-review-rule-field="doseRule.perHaLimitUnit">${renderSimpleOptions([
+              ['kg/ha','kg/ha'], ['L/ha','L/ha']
+            ], preset.perHaLimitUnit || 'kg/ha')}</select></div>
+          </div>
+          <div class="inline-fields two ${preset.concentrationKind === 'fixed' ? '' : 'hidden'}" data-dose-concentration-panel="fixedLimitUnit">
+            <div class="field"><span>Unidad límite por ha</span><select data-review-rule-field="doseRule.perHaLimitUnit">${renderSimpleOptions([
+              ['kg/ha','kg/ha'], ['L/ha','L/ha']
+            ], preset.perHaLimitUnit || 'kg/ha')}</select></div>
+            <div class="field dose-auto-note"><span>Automatización</span><div class="input-like">La unidad aplicada esperada se ajusta automáticamente.</div></div>
+          </div>
+          <input type="hidden" data-review-rule-field="doseRule.displayUnit" value="${escapeAttr(preset.concentrationUnit || '%')}">
+          <input type="hidden" data-review-rule-field="doseRule.expectedAppliedUnit" value="${escapeAttr(preset.concentrationExpectedUnit || '%')}">
+        </section>
       </div>
     `;
   }
+
+  function normalizeDoseReviewSuggestion(suggestion) {
+    const base = {
+      uiMode: '',
+      fixedUnit: 'kg/ha',
+      fixedExpectedUnit: 'kg/ha',
+      fixedValue: '',
+      rangeUnit: 'kg/ha',
+      rangeExpectedUnit: 'kg/ha',
+      rangeMin: '',
+      rangeMax: '',
+      concentrationKind: 'range',
+      concentrationUnit: '%',
+      concentrationExpectedUnit: '%',
+      concentrationValue: '',
+      concentrationMin: '',
+      concentrationMax: '',
+      perHaLimit: '',
+      perHaLimitUnit: 'kg/ha'
+    };
+    if (!suggestion || typeof suggestion !== 'object') return base;
+    if (suggestion.mode === 'fixed') {
+      base.uiMode = 'fixed';
+      base.fixedUnit = suggestion.displayUnit || suggestion.expectedAppliedUnit || 'kg/ha';
+      base.fixedExpectedUnit = suggestion.expectedAppliedUnit || base.fixedUnit;
+      base.fixedValue = ruleInputValue(suggestion.value);
+      return base;
+    }
+    if (suggestion.mode === 'range') {
+      base.uiMode = 'range';
+      base.rangeUnit = suggestion.displayUnit || suggestion.expectedAppliedUnit || 'kg/ha';
+      base.rangeExpectedUnit = suggestion.expectedAppliedUnit || base.rangeUnit;
+      base.rangeMin = ruleInputValue(suggestion.min);
+      base.rangeMax = ruleInputValue(suggestion.max);
+      return base;
+    }
+    if (String(suggestion.mode || '').startsWith('concentration')) {
+      base.uiMode = 'concentration';
+      base.concentrationKind = (suggestion.mode === 'concentration_fixed_with_ha_limit') ? 'fixed' : 'range';
+      base.concentrationUnit = suggestion.displayUnit || '%';
+      base.concentrationExpectedUnit = suggestion.expectedAppliedUnit || base.concentrationUnit;
+      base.concentrationValue = ruleInputValue(suggestion.value);
+      base.concentrationMin = ruleInputValue(suggestion.min);
+      base.concentrationMax = ruleInputValue(suggestion.max);
+      base.perHaLimit = ruleInputValue(suggestion.perHaLimit);
+      base.perHaLimitUnit = suggestion.perHaLimitUnit || 'kg/ha';
+      return base;
+    }
+    return base;
+  }
+
+  function getSelectedDoseUiMode(root = document) {
+    return root.querySelector('[data-dose-ui-mode]:checked')?.value || '';
+  }
+
+  function syncReviewDoseRulePanels(root) {
+    if (!root) return;
+    const uiMode = getSelectedDoseUiMode(root);
+    root.querySelectorAll('.dose-choice-card').forEach(card => {
+      const input = card.querySelector('[data-dose-ui-mode]');
+      card.classList.toggle('selected', !!input?.checked);
+    });
+    root.querySelector('[data-dose-panel="fixed"]')?.classList.toggle('hidden', uiMode !== 'fixed');
+    root.querySelector('[data-dose-panel="range"]')?.classList.toggle('hidden', uiMode !== 'range');
+    root.querySelector('[data-dose-panel="concentration"]')?.classList.toggle('hidden', uiMode !== 'concentration');
+
+    const rangeUnit = root.querySelector('[data-dose-range-unit]')?.value || 'kg/ha';
+    const fixedUnit = root.querySelector('[data-dose-fixed-unit]')?.value || 'kg/ha';
+    const concUnit = root.querySelector('[data-dose-concentration-unit]')?.value || '%';
+    const concKind = root.querySelector('[data-dose-concentration-kind]')?.value || 'range';
+
+    const fixedExpected = root.querySelector('[data-dose-panel="fixed"] [data-review-rule-field="doseRule.expectedAppliedUnit"]');
+    if (fixedExpected) fixedExpected.value = fixedUnit;
+    const rangeExpected = root.querySelector('[data-dose-panel="range"] [data-review-rule-field="doseRule.expectedAppliedUnit"]');
+    if (rangeExpected) rangeExpected.value = rangeUnit;
+    const concDisplay = root.querySelector('[data-dose-panel="concentration"] [data-review-rule-field="doseRule.displayUnit"]');
+    if (concDisplay) concDisplay.value = concUnit;
+    const concExpected = root.querySelector('[data-dose-panel="concentration"] [data-review-rule-field="doseRule.expectedAppliedUnit"]');
+    if (concExpected) concExpected.value = concUnit === '%' ? '%' : concUnit;
+
+    root.querySelector('[data-dose-concentration-panel="fixed"]')?.classList.toggle('hidden', concKind !== 'fixed');
+    root.querySelector('[data-dose-concentration-panel="range"]')?.classList.toggle('hidden', concKind !== 'range');
+    root.querySelector('[data-dose-concentration-panel="rangeLimit"]')?.classList.toggle('hidden', concKind !== 'range');
+    root.querySelector('[data-dose-concentration-panel="fixedLimitUnit"]')?.classList.toggle('hidden', concKind !== 'fixed');
+  }
+
+  function collectDoseRuleManualFromReview() {
+    const root = document.querySelector('[data-dose-review-editor]');
+    if (!root) return { hasManual: false, value: null };
+    const uiMode = getSelectedDoseUiMode(root);
+    if (!uiMode) return { hasManual: false, value: null };
+    if (uiMode === 'fixed') {
+      const unit = root.querySelector('[data-dose-fixed-unit]')?.value || 'kg/ha';
+      return {
+        hasManual: true,
+        value: buildDoseRuleFromEdit({
+          mode: 'fixed',
+          displayUnit: unit,
+          expectedAppliedUnit: unit,
+          value: readReviewRuleNumeric('doseRule.value')
+        })
+      };
+    }
+    if (uiMode === 'range') {
+      const unit = root.querySelector('[data-dose-range-unit]')?.value || 'kg/ha';
+      return {
+        hasManual: true,
+        value: buildDoseRuleFromEdit({
+          mode: 'range',
+          displayUnit: unit,
+          expectedAppliedUnit: unit,
+          min: readReviewRuleNumeric('doseRule.min'),
+          max: readReviewRuleNumeric('doseRule.max')
+        })
+      };
+    }
+    if (uiMode === 'concentration') {
+      const concKind = root.querySelector('[data-dose-concentration-kind]')?.value || 'range';
+      const concUnit = root.querySelector('[data-dose-concentration-unit]')?.value || '%';
+      const perHaLimitUnit = Array.from(root.querySelectorAll('[data-dose-panel="concentration"] [data-review-rule-field="doseRule.perHaLimitUnit"]')).find(el => !el.closest('.hidden'))?.value || 'kg/ha';
+      const mode = concKind === 'fixed'
+        ? (concUnit === '%' ? 'concentration_fixed_with_ha_limit' : 'concentration_hl_range_with_ha_limit')
+        : (concUnit === '%' ? 'concentration_range_with_ha_limit' : 'concentration_hl_range_with_ha_limit');
+      const payload = {
+        mode,
+        displayUnit: concUnit,
+        expectedAppliedUnit: concUnit,
+        perHaLimit: readReviewRuleNumeric('doseRule.perHaLimit'),
+        perHaLimitUnit
+      };
+      if (concKind === 'fixed') {
+        const value = readReviewRuleNumeric('doseRule.value');
+        if (concUnit === '%') {
+          payload.value = value;
+        } else {
+          payload.min = value;
+          payload.max = value;
+        }
+      } else {
+        payload.min = readReviewRuleNumeric('doseRule.min');
+        payload.max = readReviewRuleNumeric('doseRule.max');
+      }
+      return { hasManual: true, value: buildDoseRuleFromEdit(payload) };
+    }
+    return { hasManual: false, value: null };
+  }
+
 
   function renderDocumentReviewVolumeReferenceEditor(suggestion) {
     return `
@@ -3218,21 +3480,7 @@ ${text}`);
 
   function readDocumentReviewManualValue(field) {
     if (field.kind === 'doseRule') {
-      const mode = readReviewRuleField('doseRule.mode');
-      if (!mode) return { hasManual: false, value: null };
-      return {
-        hasManual: true,
-        value: buildDoseRuleFromEdit({
-          mode,
-          displayUnit: readReviewRuleField('doseRule.displayUnit'),
-          expectedAppliedUnit: readReviewRuleField('doseRule.expectedAppliedUnit'),
-          value: readReviewRuleNumeric('doseRule.value'),
-          min: readReviewRuleNumeric('doseRule.min'),
-          max: readReviewRuleNumeric('doseRule.max'),
-          perHaLimit: readReviewRuleNumeric('doseRule.perHaLimit'),
-          perHaLimitUnit: readReviewRuleField('doseRule.perHaLimitUnit')
-        })
-      };
+      return collectDoseRuleManualFromReview();
     }
     if (field.kind === 'volumeReferenceStructured') {
       const mode = readReviewVolumeField('volumeReference.mode');
@@ -3284,7 +3532,12 @@ ${text}`);
   }
 
   function readReviewRuleField(key) {
-    return document.querySelector(`[data-review-rule-field="${cssEscapeValue(key)}"]`)?.value?.trim() ?? '';
+    const nodes = Array.from(document.querySelectorAll(`[data-review-rule-field="${cssEscapeValue(key)}"]`));
+    if (!nodes.length) return '';
+    const radio = nodes[0];
+    if (radio.type === 'radio') return nodes.find(node => node.checked)?.value?.trim() ?? '';
+    const preferred = nodes.find(node => !node.closest('.hidden')) || nodes[0];
+    return preferred?.value?.trim() ?? '';
   }
 
   function readReviewRuleNumeric(key) {
