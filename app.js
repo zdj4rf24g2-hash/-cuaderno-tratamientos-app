@@ -1,488 +1,3979 @@
 (() => {
   'use strict';
 
-  const VERSION = '2.0.0';
-  const STORAGE_KEY = 'ct_v2_state';
-  const DOC_DB = 'ct_v2_docs';
-  const DOC_STORE = 'docs';
-  const $ = (sel, root=document) => root.querySelector(sel);
-  const $$ = (sel, root=document) => [...root.querySelectorAll(sel)];
-  const refs = {
-    views: {
-      inicio: $('#view-inicio'),
-      nuevo: $('#view-nuevo'),
-      cuaderno: $('#view-cuaderno'),
-      alertas: $('#view-alertas'),
-      mas: $('#view-mas')
-    },
-    nav: $$('.nav-button'),
-    search: $('#globalSearch'),
-    modal: $('#modalRoot'),
-    toast: $('#toastRoot'),
-    install: $('#installButton'),
-    backupInput: $('#backupImportInput'),
-    docsInput: $('#catalogDocInput')
+  const APP_VERSION = '2.0';
+  const SCHEMA_VERSION = '1.0.0';
+  const DB_NAME = 'cuaderno-tratamientos-pwa-v1';
+  const DB_STORE = 'state';
+  const DB_KEY = 'singleton';
+  const EMPTY_CAMPAIGN_ID = '2026';
+  const OFFICIAL_COLUMNS = [
+    ['ordinal', 'N.º'],
+    ['date', 'Fecha'],
+    ['productName', 'Nombre del producto'],
+    ['registration', 'N.º de registro'],
+    ['lot', 'Lote'],
+    ['doseReference', 'Dosis recomendada'],
+    ['doseApplied', 'Dosis aplicada'],
+    ['volumeReference', 'Volumen caldo'],
+    ['litersPerHa', 'Litros/ha aplicados'],
+    ['crop', 'Cultivo'],
+    ['objective', 'Plaga / patógeno'],
+    ['safetyPeriod', 'P.S.'],
+    ['campaignCount', 'Tratamientos campaña'],
+    ['activeIngredients', 'Principios activos'],
+    ['mixRule', 'MEZCLA']
+  ];
+
+  const IMPORT_KEYS = [
+    ['date', 'Fecha'],
+    ['productName', 'Nombre del producto'],
+    ['registration', 'N.º de registro'],
+    ['lot', 'Lote'],
+    ['doseReference', 'Dosis recomendada'],
+    ['doseApplied', 'Dosis aplicada'],
+    ['volumeReference', 'Volumen caldo'],
+    ['litersPerHa', 'Litros/ha aplicados'],
+    ['crop', 'Cultivo'],
+    ['objective', 'Plaga / patógeno'],
+    ['safetyPeriod', 'P.S.'],
+    ['activeIngredients', 'Principios activos'],
+    ['mixRule', 'MEZCLA']
+  ];
+
+  const DOCUMENT_REVIEW_FIELDS = [
+    { key: 'registration', label: 'N.º de registro', kind: 'text', required: true },
+    { key: 'activeIngredients', label: 'Principios activos', kind: 'textarea', required: true },
+    { key: 'mixRule', label: 'MEZCLA', kind: 'mix', required: true },
+    { key: 'allowedUses', label: 'Cultivo / uso autorizado', kind: 'lines', required: false },
+    { key: 'allowedObjectives', label: 'Plaga / patógeno u objetivo', kind: 'lines', required: false },
+    { key: 'doseReference', label: 'Dosis recomendada', kind: 'textarea', required: true },
+    { key: 'doseRule', label: 'Regla de validación de dosis', kind: 'doseRule', required: true },
+    { key: 'volumeReference', label: 'Volumen caldo', kind: 'volumeReferenceStructured', required: true },
+    { key: 'safetyPeriod', label: 'P.S.', kind: 'text', required: true },
+    { key: 'maxApplications', label: 'Máx. aplicaciones campaña', kind: 'integerOrNoConsta', required: true },
+    { key: 'applicationInterval', label: 'Intervalo entre aplicaciones', kind: 'text', required: false },
+    { key: 'applicationStage', label: 'Estadio / condiciones de aplicación', kind: 'textarea', required: false }
+  ];
+
+  let state;
+  let ui = {
+    screen: 'home',
+    ledgerView: 'mobile',
+    ledgerQuery: '',
+    ledgerDateFilter: '',
+    morePanel: null,
+    currentDraftId: null,
+    importPreview: null,
+    searchQuery: ''
   };
 
-  const ui = {
-    view: 'inicio',
-    search: '',
-    cuadernoMode: 'cards',
-    activeDraftId: null,
-    pendingDocProductId: null,
-    installPrompt: null,
-    tab: 'ficha'
-  };
+  const els = {};
 
-  const todayIso = () => {
-    const d = new Date();
-    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-  };
-  const nowIso = () => new Date().toISOString();
-  const uid = (p='id') => `${p}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2,9)}`;
-  const esc = v => String(v ?? '').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&#39;');
-  const norm = v => String(v ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim().toLowerCase();
-  const num = v => v === '' || v === null || v === undefined ? null : (Number.isFinite(Number(String(v).replace(',','.'))) ? Number(String(v).replace(',','.')) : null);
-  const fmtNum = v => num(v) === null ? '—' : new Intl.NumberFormat('es-ES',{maximumFractionDigits:3}).format(num(v));
-  const fmtDate = iso => {
-    const [y,m,d] = String(iso || '').split('-');
-    return y && m && d ? `${d}/${m}/${y}` : '—';
-  };
-  const parseManualDate = raw => {
-    const m = String(raw || '').trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
-    if (!m) return null;
-    const dt = new Date(Number(m[3]), Number(m[2])-1, Number(m[1]));
-    if (dt.getFullYear() !== Number(m[3]) || dt.getMonth() !== Number(m[2])-1 || dt.getDate() !== Number(m[1])) return null;
-    return `${m[3]}-${String(m[2]).padStart(2,'0')}-${String(m[1]).padStart(2,'0')}`;
-  };
-  const dateObj = iso => {
-    const [y,m,d] = String(iso || '').split('-').map(Number);
-    if (!y || !m || !d) return null;
-    const dt = new Date(y,m-1,d);
-    return dt.getFullYear() === y && dt.getMonth() === m-1 && dt.getDate() === d ? dt : null;
-  };
-  const isFuture = iso => {
-    const a = dateObj(iso);
-    const b = dateObj(todayIso());
-    return Boolean(a && b && a.getTime() > b.getTime());
-  };
-  const units = ['g/hL','kg/hL','mL/hL','L/hL','g/ha','kg/ha','mL/ha','L/ha'];
+  document.addEventListener('DOMContentLoaded', init);
 
-  const blankUse = () => ({
-    id: uid('uso'),
-    crop: 'Vid de vinificación',
-    target: '',
-    ps: 'A verificar',
-    doseDisplay: 'A verificar',
-    doseRule: { kind:'unset', unit:'', value:null, min:null, max:null, limitHa:null },
-    volumeDisplay: 'A verificar',
-    volumeRule: { kind:'unset', value:null, min:null, max:null },
-    maxApplications: null,
-    interval: '',
-    stadium: '',
-    extra: ''
-  });
-
-  const blankState = () => ({
-    schema: 'CT-APP-V2',
-    version: VERSION,
-    campaign: '2026',
-    createdAt: nowIso(),
-    updatedAt: nowIso(),
-    settings: {
-      campaignName: 'Campaña 2026',
-      applicator: 'JOSE FELIX BUA VILA',
-      defaultCrop: 'Vid de vinificación',
-      defaultLha: 400
-    },
-    products: [],
-    interventions: [],
-    drafts: [],
-    resolvedAlerts: [],
-    importHistory: []
-  });
-
-  function normalizeUse(u={}) {
-    return { ...blankUse(), ...u,
-      id: u.id || uid('uso'),
-      doseRule: { kind:'unset', unit:'', value:null, min:null, max:null, limitHa:null, ...(u.doseRule || {}) },
-      volumeRule: { kind:'unset', value:null, min:null, max:null, ...(u.volumeRule || {}) }
-    };
+  async function init() {
+    cacheEls();
+    bindGlobalEvents();
+    state = await loadState();
+    ensureStateShape();
+    updateCampaignLabel();
+    render();
+    registerServiceWorker();
   }
-  function normalizeProduct(p={}) {
-    const product = {
-      id: p.id || uid('prod'),
-      name: p.name || 'Producto sin nombre',
-      registration: p.registration || 'A verificar',
-      activeIngredients: p.activeIngredients || 'A verificar',
-      mix: p.mix || 'A verificar',
-      status: p.status === 'verified' ? 'verified' : 'pending',
-      archived: Boolean(p.archived),
-      uses: Array.isArray(p.uses) && p.uses.length ? p.uses.map(normalizeUse) : [blankUse()],
-      docs: Array.isArray(p.docs) ? p.docs : [],
-      createdAt: p.createdAt || nowIso(),
-      updatedAt: p.updatedAt || nowIso()
-    };
-    product.status = productIsVerified(product) ? 'verified' : 'pending';
-    return product;
+
+  function cacheEls() {
+    els.screen = document.getElementById('screen');
+    els.globalSearch = document.getElementById('globalSearch');
+    els.globalSearchResults = document.getElementById('globalSearchResults');
+    els.activeCampaignLabel = document.getElementById('activeCampaignLabel');
+    els.toast = document.getElementById('toast');
+    els.modalHost = document.getElementById('modalHost');
+    els.installHintBtn = document.getElementById('installHintBtn');
+    els.navButtons = Array.from(document.querySelectorAll('.nav-item'));
   }
-  function normalizeApp(a={}) {
+
+  function bindGlobalEvents() {
+    els.navButtons.forEach(btn => {
+      btn.addEventListener('click', () => navigate(btn.dataset.screen));
+    });
+
+    els.installHintBtn.addEventListener('click', () => {
+      showInfoModal(
+        'Instalar en iPhone',
+        `<p>En Safari, pulsa <strong>Compartir</strong> y después <strong>Añadir a pantalla de inicio</strong>.</p>
+         <p class="muted">La app funciona con datos locales en el dispositivo. La carga inicial se importa después desde su archivo separado.</p>`
+      );
+    });
+
+    els.globalSearch.addEventListener('input', event => {
+      ui.searchQuery = event.target.value || '';
+      renderGlobalSearchResults();
+    });
+
+    els.globalSearchResults.addEventListener('click', event => {
+      const btn = event.target.closest('[data-search-target]');
+      if (!btn) return;
+      const target = btn.dataset.searchTarget;
+      const id = btn.dataset.searchId;
+      els.globalSearchResults.classList.add('hidden');
+      if (target === 'treatment') {
+        ui.screen = 'ledger';
+        ui.ledgerView = 'mobile';
+        ui.ledgerQuery = id ? findTreatment(id)?.productName || '' : '';
+      } else if (target === 'product') {
+        ui.screen = 'more';
+        ui.morePanel = 'catalog';
+      } else if (target === 'alert') {
+        ui.screen = 'alerts';
+      }
+      syncNav();
+      render();
+    });
+
+    els.screen.addEventListener('click', handleScreenClick);
+    els.screen.addEventListener('input', handleScreenInput);
+    els.screen.addEventListener('change', handleScreenChange);
+    els.modalHost.addEventListener('click', handleModalHostClick);
+    els.modalHost.addEventListener('change', handleModalHostChange);
+  }
+
+  function defaultState() {
+    const now = new Date().toISOString();
     return {
-      id: a.id || uid('apl'),
-      productId: a.productId || '',
-      productNameSnapshot: a.productNameSnapshot || '',
-      lot: a.lot || '',
-      crop: a.crop || 'Vid de vinificación',
-      target: a.target || '',
-      doseApplied: a.doseApplied ?? '',
-      doseUnit: a.doseUnit || '',
-      lha: a.lha ?? '',
-      observations: a.observations || '',
-      incidence: a.incidence || '',
-      createdAt: a.createdAt || nowIso(),
-      updatedAt: a.updatedAt || nowIso()
+      schemaVersion: SCHEMA_VERSION,
+      appVersion: APP_VERSION,
+      createdAt: now,
+      updatedAt: now,
+      activeCampaignId: EMPTY_CAMPAIGN_ID,
+      campaigns: [{
+        id: EMPTY_CAMPAIGN_ID,
+        name: 'Campaña 2026',
+        active: true,
+        applicator: '',
+        createdAt: now,
+        updatedAt: now
+      }],
+      products: [],
+      treatments: [],
+      alerts: [],
+      drafts: [],
+      history: {
+        imports: [],
+        restores: [],
+        exports: []
+      }
     };
-  }
-  function normalizeIntervention(i={}) {
-    return {
-      id: i.id || uid('int'),
-      date: i.date || todayIso(),
-      applications: Array.isArray(i.applications) ? i.applications.map(normalizeApp) : [],
-      createdAt: i.createdAt || nowIso(),
-      updatedAt: i.updatedAt || nowIso()
-    };
-  }
-  function normalizeDraft(d={}) {
-    return {
-      id: d.id || uid('draft'),
-      title: d.title || `Borrador ${fmtDate(todayIso())}`,
-      groups: Array.isArray(d.groups) ? d.groups.map(g => ({
-        id: g.id || uid('grupo'),
-        date: g.date || '',
-        futureConfirmed: Boolean(g.futureConfirmed),
-        applications: Array.isArray(g.applications) ? g.applications.map(normalizeApp) : []
-      })) : [],
-      currentGroupId: d.currentGroupId || '',
-      createdAt: d.createdAt || nowIso(),
-      updatedAt: d.updatedAt || nowIso()
-    };
-  }
-  function migrate(data={}) {
-    const base = blankState();
-    return {
-      ...base,
-      ...data,
-      version: VERSION,
-      settings: { ...base.settings, ...(data.settings || {}) },
-      products: Array.isArray(data.products) ? data.products.map(normalizeProduct) : [],
-      interventions: Array.isArray(data.interventions) ? data.interventions.map(normalizeIntervention) : [],
-      drafts: Array.isArray(data.drafts) ? data.drafts.map(normalizeDraft) : [],
-      resolvedAlerts: Array.isArray(data.resolvedAlerts) ? data.resolvedAlerts : [],
-      importHistory: Array.isArray(data.importHistory) ? data.importHistory : []
-    };
-  }
-  function load() {
-    try { return migrate(JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null') || {}); }
-    catch { return blankState(); }
-  }
-  let state = load();
-  function save() { state.updatedAt = nowIso(); localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
-  function mutate(fn, message='') { fn(state); save(); renderAll(); if (message) toast(message); }
-
-  function toast(message, tone='info') {
-    const id = uid('toast');
-    refs.toast.insertAdjacentHTML('beforeend', `<div id="${id}" class="toast toast-${esc(tone)}">${esc(message)}</div>`);
-    setTimeout(() => $(`#${id}`)?.remove(), 3600);
-  }
-  function badge(text, tone='neutral') { return `<span class="badge badge-${esc(tone)}">${esc(text)}</span>`; }
-  function statusBadge(p) { return badge(p?.status === 'verified' ? 'Verificado' : 'A verificar', p?.status === 'verified' ? 'success' : 'warning'); }
-  function modal(html, cls='') {
-    refs.modal.innerHTML = `<div class="modal-backdrop" data-close-modal></div><section class="modal ${esc(cls)}" role="dialog" aria-modal="true">${html}</section>`;
-    $$('[data-close-modal]', refs.modal).forEach(b => b.addEventListener('click', closeModal));
-  }
-  function closeModal(){ refs.modal.innerHTML=''; }
-  function confirmBox(title, message, onConfirm, confirmText='Confirmar', danger=false) {
-    modal(`<div class="modal-head"><h2>${esc(title)}</h2><button class="icon-button" data-close-modal type="button">×</button></div><p>${esc(message)}</p><div class="action-row"><button class="secondary-button" data-close-modal type="button">Cancelar</button><button id="modalConfirm" class="${danger?'danger-button':'primary-button'}" type="button">${esc(confirmText)}</button></div>`);
-    $('#modalConfirm', refs.modal)?.addEventListener('click', () => { closeModal(); onConfirm?.(); });
-  }
-  function futureDoubleConfirm(iso, done) {
-    confirmBox('Fecha futura detectada', `Has indicado ${fmtDate(iso)}. La app bloquea inicialmente fechas futuras.`, () => {
-      confirmBox('Segunda verificación', `Confirma de forma expresa que deseas registrar ${fmtDate(iso)}.`, done, 'Confirmar fecha futura', true);
-    }, 'Continuar');
   }
 
-  function byName(name){ const n=norm(name); return state.products.find(p => norm(p.name)===n) || null; }
-  function product(id){ return state.products.find(p => p.id===id) || null; }
-  function draft(){ return state.drafts.find(d => d.id===ui.activeDraftId) || null; }
-  function apps(){ return state.interventions.flatMap(i => i.applications.map(a => ({intervention:i, app:a}))); }
-  function productUse(p,a){ return p?.uses.find(u => norm(u.crop)===norm(a.crop) && (!u.target || norm(u.target)===norm(a.target))) || p?.uses.find(u => norm(u.crop)===norm(a.crop)) || p?.uses[0] || null; }
-  function prodCount(id){ return apps().filter(x => x.app.productId===id).length; }
-  function interventionNumbers(){ const map=new Map(); [...state.interventions].sort((a,b)=>a.date.localeCompare(b.date)).forEach((i,n)=>map.set(i.id,n+1)); return map; }
-  function productIsVerified(p) {
-    const base = p?.name && p.registration && p.registration!=='A verificar' && p.activeIngredients && p.activeIngredients!=='A verificar' && p.mix && p.mix!=='A verificar';
-    const use = p?.uses?.some(u => u.crop && u.target && u.ps && u.ps!=='A verificar' && u.doseDisplay && u.doseDisplay!=='A verificar' && u.doseRule?.kind!=='unset' && u.volumeDisplay && u.volumeDisplay!=='A verificar' && u.volumeRule?.kind!=='unset');
-    return Boolean(base && use);
+  async function openDb() {
+    return new Promise((resolve, reject) => {
+      const request = indexedDB.open(DB_NAME, 1);
+      request.onerror = () => reject(request.error);
+      request.onupgradeneeded = () => {
+        const db = request.result;
+        if (!db.objectStoreNames.contains(DB_STORE)) db.createObjectStore(DB_STORE);
+      };
+      request.onsuccess = () => resolve(request.result);
+    });
   }
-  function searchMatch(...vals){ return !ui.search || norm(vals.filter(Boolean).join(' ')).includes(norm(ui.search)); }
-  function dosePerHa(a){ const d=num(a.doseApplied), l=num(a.lha); if(d===null||l===null) return null; const u=norm(a.doseUnit); return u.includes('/hl') ? d*(l/100) : u.includes('/ha') ? d : null; }
-  function validate(a, ctx={}) {
-    const issues=[]; const p=product(a.productId); const u=productUse(p,a); const g=ctx.group;
-    if(!p) issues.push({id:'p',severity:'blocking',text:'Debes seleccionar o crear un producto.'});
-    if(!String(a.lot||'').trim()) issues.push({id:'lot',severity:'blocking',text:'El lote es obligatorio.'});
-    if(!String(a.crop||'').trim()) issues.push({id:'crop',severity:'blocking',text:'El cultivo/uso es obligatorio.'});
-    if(!String(a.target||'').trim()) issues.push({id:'target',severity:'blocking',text:'La plaga u objetivo es obligatorio.'});
-    if(num(a.doseApplied)===null) issues.push({id:'dose',severity:'blocking',text:'La dosis aplicada debe ser numérica.'});
-    if(!String(a.doseUnit||'').trim()) issues.push({id:'unit',severity:'blocking',text:'La unidad de dosis es obligatoria.'});
-    if(num(a.lha)===null) issues.push({id:'lha',severity:'blocking',text:'Los litros/ha deben ser numéricos.'});
-    if(g?.applications?.some(x => x.productId===a.productId && x.id!==a.id)) issues.push({id:'dup',severity:'blocking',text:'No se permite el mismo producto dos veces en la misma fecha.'});
-    if(ctx.date && isFuture(ctx.date) && !ctx.futureConfirmed) issues.push({id:'future',severity:'blocking',text:'La fecha futura requiere doble verificación.'});
-    if(p){
-      if(p.status!=='verified') issues.push({id:'pending',severity:'warning',text:'La ficha del producto está A verificar.'});
-      if(!u) issues.push({id:'use',severity:'warning',text:'La ficha técnica no tiene uso asociado.'});
-      if(u){
-        const d=num(a.doseApplied), l=num(a.lha), r=u.doseRule||{}, vr=u.volumeRule||{};
-        if(r.kind!=='unset' && r.unit && norm(r.unit)!==norm(a.doseUnit)) issues.push({id:'unitMismatch',severity:'blocking',text:`La unidad aplicada no coincide con la regla técnica (${r.unit}).`});
-        if(d!==null && r.kind==='single' && r.value!==null && d!==Number(r.value)) issues.push({id:'doseSingle',severity:'blocking',text:`La dosis debe ser ${r.value} ${r.unit}.`});
-        if(d!==null && r.kind==='range'){
-          if(r.min!==null && d<Number(r.min)) issues.push({id:'doseMin',severity:'blocking',text:`La dosis queda por debajo del mínimo: ${r.min} ${r.unit}.`});
-          if(r.max!==null && d>Number(r.max)) issues.push({id:'doseMax',severity:'blocking',text:`La dosis supera el máximo: ${r.max} ${r.unit}.`});
+
+  async function loadState() {
+    try {
+      const db = await openDb();
+      return new Promise((resolve, reject) => {
+        const tx = db.transaction(DB_STORE, 'readonly');
+        const store = tx.objectStore(DB_STORE);
+        const req = store.get(DB_KEY);
+        req.onsuccess = () => resolve(req.result || defaultState());
+        req.onerror = () => reject(req.error);
+      });
+    } catch (error) {
+      console.error(error);
+      toast('No se pudo leer el almacenamiento local. Se abre un estado vacío.');
+      return defaultState();
+    }
+  }
+
+  async function saveState() {
+    state.updatedAt = new Date().toISOString();
+    try {
+      const db = await openDb();
+      await new Promise((resolve, reject) => {
+        const tx = db.transaction(DB_STORE, 'readwrite');
+        const store = tx.objectStore(DB_STORE);
+        const req = store.put(state, DB_KEY);
+        req.onsuccess = () => resolve();
+        req.onerror = () => reject(req.error);
+      });
+    } catch (error) {
+      console.error(error);
+      toast('No se pudo guardar en el dispositivo.');
+    }
+  }
+
+  function ensureStateShape() {
+    const fallback = defaultState();
+    state = state && typeof state === 'object' ? state : fallback;
+    state.schemaVersion ||= SCHEMA_VERSION;
+    state.appVersion = APP_VERSION;
+    state.activeCampaignId ||= EMPTY_CAMPAIGN_ID;
+    state.campaigns ||= fallback.campaigns;
+    state.products ||= [];
+    state.products.forEach(ensureProductDocumentShape);
+    state.treatments ||= [];
+    state.alerts ||= [];
+    state.drafts ||= [];
+    state.history ||= { imports: [], restores: [], exports: [] };
+    state.history.imports ||= [];
+    state.history.restores ||= [];
+    state.history.exports ||= [];
+    if (!state.campaigns.some(c => c.id === state.activeCampaignId)) {
+      state.campaigns.unshift(fallback.campaigns[0]);
+      state.activeCampaignId = EMPTY_CAMPAIGN_ID;
+    }
+  }
+
+  function registerServiceWorker() {
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('sw.js?v=2.0').then(registration => registration.update()).catch(error => console.warn('SW no registrado', error));
+    }
+  }
+
+  function navigate(screen) {
+    ui.screen = screen;
+    if (screen !== 'more') ui.morePanel = null;
+    syncNav();
+    render();
+    els.screen.focus({ preventScroll: true });
+  }
+
+  function syncNav() {
+    els.navButtons.forEach(btn => btn.classList.toggle('active', btn.dataset.screen === ui.screen));
+  }
+
+  function render() {
+    syncNav();
+    updateCampaignLabel();
+    switch (ui.screen) {
+      case 'home':
+        els.screen.innerHTML = renderHome();
+        break;
+      case 'new':
+        els.screen.innerHTML = renderNew();
+        break;
+      case 'ledger':
+        els.screen.innerHTML = renderLedger();
+        break;
+      case 'alerts':
+        els.screen.innerHTML = renderAlerts();
+        break;
+      case 'more':
+        els.screen.innerHTML = renderMore();
+        break;
+      default:
+        ui.screen = 'home';
+        els.screen.innerHTML = renderHome();
+    }
+  }
+
+  function updateCampaignLabel() {
+    const campaign = activeCampaign();
+    els.activeCampaignLabel.textContent = campaign?.name?.replace(/^Campaña\s*/i, '') || '2026';
+  }
+
+  function activeCampaign() {
+    return state.campaigns.find(c => c.id === state.activeCampaignId) || state.campaigns[0];
+  }
+
+  function activeTreatments() {
+    return state.treatments.filter(t => t.campaignId === state.activeCampaignId);
+  }
+
+  function activeAlerts() {
+    return state.alerts.filter(a => a.campaignId === state.activeCampaignId && a.status === 'ACTIVE');
+  }
+
+  function resolvedAlerts() {
+    return state.alerts.filter(a => a.campaignId === state.activeCampaignId && a.status === 'RESOLVED');
+  }
+
+  function currentDrafts() {
+    return state.drafts.filter(d => d.campaignId === state.activeCampaignId);
+  }
+
+  function renderHome() {
+    const treatments = activeTreatments();
+    const alerts = activeAlerts();
+    const drafts = currentDrafts();
+    const usedProducts = new Set(treatments.map(t => t.productName)).size;
+    const last = treatments.slice().sort(sortTreatmentDesc)[0];
+    const campaign = activeCampaign();
+    return `
+      <section class="section-card">
+        <div class="section-header">
+          <div>
+            <h2>Resumen de campaña</h2>
+            <p>Datos locales. App pública neutra; la carga real se importa de forma separada.</p>
+          </div>
+          <span class="tag ${campaign?.applicator ? 'ok' : 'pending'}">${campaign?.applicator ? 'Aplicador configurado' : 'Aplicador pendiente'}</span>
+        </div>
+        <div class="metric-grid">
+          <article class="metric-card"><strong>${treatmentDatesCount(treatments)}</strong><span>Fechas</span></article>
+          <article class="metric-card"><strong>${treatments.length}</strong><span>Aplicaciones</span></article>
+          <article class="metric-card"><strong>${usedProducts}</strong><span>Productos usados</span></article>
+          <article class="metric-card"><strong>${alerts.length}</strong><span>Alertas activas</span></article>
+        </div>
+      </section>
+
+      <section class="section-card">
+        <div class="section-header">
+          <div>
+            <h2>Acciones rápidas</h2>
+            <p>Registro, consulta y carga local.</p>
+          </div>
+        </div>
+        <div class="quick-actions">
+          <button class="primary-btn" data-action="go-new">Nuevo tratamiento</button>
+          <button class="secondary-btn" data-action="go-ledger">Abrir cuaderno</button>
+          <button class="ghost-btn" data-action="go-import">Importar carga</button>
+        </div>
+      </section>
+
+      <section class="subgrid two">
+        <article class="section-card">
+          <h2>Último tratamiento</h2>
+          ${last ? `
+            <div class="kv-grid">
+              <div class="kv"><strong>Fecha</strong><span>${formatDate(last.date)}</span></div>
+              <div class="kv"><strong>Producto</strong><span>${escapeHtml(last.productName)}</span></div>
+              <div class="kv"><strong>Dosis</strong><span>${escapeHtml(last.doseApplied || '—')}</span></div>
+            </div>
+            <div class="button-row" style="margin-top:12px"><button class="ghost-btn" data-action="go-ledger">Ver cuaderno</button></div>
+          ` : renderEmpty('Sin tratamientos registrados', 'Importa la carga inicial o crea el primer tratamiento.')}
+        </article>
+
+        <article class="section-card">
+          <h2>Borrador abierto</h2>
+          ${drafts.length ? `
+            <p>${drafts.length} borrador(es) disponibles.</p>
+            <div class="button-row" style="margin-top:12px"><button class="secondary-btn" data-action="open-drafts">Retomar</button></div>
+          ` : renderEmpty('Sin borradores', 'Los tratamientos en curso se autoguardan aquí.')}
+        </article>
+      </section>
+
+      <section class="section-card">
+        <div class="section-header">
+          <div>
+            <h2>Alertas prioritarias</h2>
+            <p>Pendientes técnicos, incidencias y revisiones abiertas.</p>
+          </div>
+          ${alerts.length ? `<span class="tag warn">${alerts.length} activas</span>` : `<span class="tag ok">Sin alertas</span>`}
+        </div>
+        ${alerts.length ? `<div class="alert-list">${alerts.slice(0, 3).map(renderAlertCardMini).join('')}</div>` : renderEmpty('No hay alertas activas', 'Las alertas resueltas conservan trazabilidad histórica.')}
+        ${alerts.length ? `<div class="button-row" style="margin-top:12px"><button class="ghost-btn" data-action="go-alerts">Ver todas</button></div>` : ''}
+      </section>
+    `;
+  }
+
+  function renderNew() {
+    const drafts = currentDrafts();
+    const draft = ui.currentDraftId ? drafts.find(d => d.id === ui.currentDraftId) : null;
+    if (!draft) {
+      return `
+        <section class="section-card">
+          <div class="section-header">
+            <div>
+              <h2>Nuevo tratamiento</h2>
+              <p>El flujo se autoguarda. Puedes iniciar uno nuevo o retomar un borrador.</p>
+            </div>
+          </div>
+          <div class="button-row">
+            <button class="primary-btn" data-action="start-draft">Comenzar</button>
+            ${drafts.length ? `<button class="secondary-btn" data-action="open-drafts">Ver borradores (${drafts.length})</button>` : ''}
+          </div>
+        </section>
+        ${drafts.length ? `<section class="section-card"><h2>Borradores disponibles</h2><div class="product-list">${drafts.map(renderDraftChoice).join('')}</div></section>` : ''}
+      `;
+    }
+    return renderDraftBuilder(draft);
+  }
+
+  function renderDraftChoice(draft) {
+    const firstDate = draft.groups?.[0]?.date ? formatDate(draft.groups[0].date) : 'Fecha pendiente';
+    const productCount = (draft.groups || []).reduce((sum, group) => sum + (group.products || []).length, 0);
+    return `
+      <article class="draft-card">
+        <div class="section-header">
+          <div>
+            <h3>Borrador ${escapeHtml(firstDate)}</h3>
+            <p>${productCount} producto(s) incorporados.</p>
+          </div>
+          <span class="tag pending">Autoguardado</span>
+        </div>
+        <div class="button-row">
+          <button class="secondary-btn" data-action="resume-draft" data-id="${escapeAttr(draft.id)}">Retomar</button>
+          <button class="danger-btn" data-action="discard-draft" data-id="${escapeAttr(draft.id)}">Descartar</button>
+        </div>
+      </article>
+    `;
+  }
+
+  function renderDraftBuilder(draft) {
+    const campaign = activeCampaign();
+    const groupIndex = draft.currentGroupIndex || 0;
+    const group = draft.groups[groupIndex] || draft.groups[0];
+    const pending = draft.pendingProduct || emptyPendingProduct();
+    const exactProduct = findProductByName(pending.productName);
+    const objectives = exactProduct?.allowedObjectives || [];
+    const uses = exactProduct?.allowedUses || [];
+    const productOptions = recentProductsFirst().map(p => `<option value="${escapeAttr(p.name)}"></option>`).join('');
+    const dateText = group?.date ? isoToTextDate(group.date) : (group?.dateText || '');
+    const datePicker = group?.date || '';
+    const products = group?.products || [];
+    const allGroups = draft.groups || [];
+
+    return `
+      <section class="section-card">
+        <div class="section-header">
+          <div>
+            <h2>Registro guiado</h2>
+            <p>Autoguardado activo. Borrador ${escapeHtml(draft.id.slice(-6))}.</p>
+          </div>
+          <span class="tag pending">${allGroups.length} fecha(s)</span>
+        </div>
+        <div class="inline-fields two">
+          <div class="field">
+            <span>Fecha manual dd/mm/aaaa</span>
+            <input id="draftDateText" data-draft-field="dateText" value="${escapeAttr(dateText)}" inputmode="numeric" placeholder="dd/mm/aaaa">
+          </div>
+          <div class="field">
+            <span>Calendario</span>
+            <input id="draftDatePicker" data-draft-field="datePicker" type="date" value="${escapeAttr(datePicker)}">
+          </div>
+        </div>
+        <div class="field">
+          <span>Aplicador activo</span>
+          <input data-draft-field="applicator" value="${escapeAttr(draft.applicator ?? campaign?.applicator ?? '')}" placeholder="Nombre del aplicador">
+          <small>Se guarda con este tratamiento. El valor por campaña puede ajustarse en Más &gt; Ajustes.</small>
+        </div>
+        <div class="button-row" style="margin-top:12px">
+          ${allGroups.map((g, idx) => `<button class="pill-btn ${idx === groupIndex ? 'active' : ''}" data-action="switch-draft-group" data-index="${idx}">${g.date ? formatDate(g.date) : `Fecha ${idx + 1}`}</button>`).join('')}
+        </div>
+      </section>
+
+      <section class="section-card">
+        <div class="section-header">
+          <div>
+            <h2>Producto de la fecha activa</h2>
+            <p>Selecciona un producto verificado o crea uno provisional A verificar.</p>
+          </div>
+          ${exactProduct ? `<span class="tag ${exactProduct.verificationStatus === 'VERIFIED' ? 'ok' : 'pending'}">${exactProduct.verificationStatus === 'VERIFIED' ? 'Verificado' : 'A verificar'}</span>` : `<span class="tag pending">Provisional</span>`}
+        </div>
+        <datalist id="productSuggestions">${productOptions}</datalist>
+        <div class="field">
+          <span>Producto</span>
+          <input list="productSuggestions" data-pending-field="productName" value="${escapeAttr(pending.productName || '')}" placeholder="Nombre comercial">
+        </div>
+        <div class="inline-fields two">
+          <div class="field">
+            <span>Lote</span>
+            <input data-pending-field="lot" value="${escapeAttr(pending.lot || '')}" placeholder="Número de lote o NO PROCEDE">
+          </div>
+          <div class="field">
+            <span>Litros/ha aplicados</span>
+            <input data-pending-field="litersPerHa" value="${escapeAttr(pending.litersPerHa || '')}" inputmode="decimal" placeholder="Ej. 400">
+          </div>
+        </div>
+        <div class="field">
+          <span>Cultivo / uso</span>
+          ${uses.length ? `<select data-pending-field="crop">${renderOptions(uses, pending.crop)}</select>` : `<input data-pending-field="crop" value="${escapeAttr(pending.crop || 'Vid de vinificación')}" placeholder="Cultivo / uso">`}
+        </div>
+        <div class="field">
+          <span>Plaga / patógeno / objetivo</span>
+          ${objectives.length > 1 ? `<select data-pending-field="objective">${renderOptions(objectives, pending.objective)}</select>` : objectives.length === 1 ? `<input data-pending-field="objective" value="${escapeAttr(pending.objective || objectives[0])}" readonly>` : `<input data-pending-field="objective" value="${escapeAttr(pending.objective || '')}" placeholder="Objetivo">`}
+        </div>
+        <div class="field">
+          <span>Dosis aplicada</span>
+          <input data-pending-field="doseApplied" value="${escapeAttr(pending.doseApplied || '')}" placeholder="Ej. 2 kg/ha, 150 cc/hL">
+          ${exactProduct ? `<small>Referencia: ${escapeHtml(exactProduct.doseReference || 'A verificar')}</small>` : `<small>Producto provisional: la dosis quedará A verificar.</small>`}
+        </div>
+        <div class="field">
+          <span>Observaciones opcionales</span>
+          <textarea data-pending-field="observations" placeholder="Observaciones">${escapeHtml(pending.observations || '')}</textarea>
+        </div>
+        <label class="checkbox-row">
+          <input type="checkbox" data-pending-field="hasIncidence" ${pending.hasIncidence ? 'checked' : ''}>
+          <span>Registrar incidencia / advertencia</span>
+        </label>
+        ${pending.hasIncidence ? `<div class="field"><span>Detalle de incidencia</span><textarea data-pending-field="incidenceText">${escapeHtml(pending.incidenceText || '')}</textarea></div>` : ''}
+        <div class="button-row" style="margin-top:12px">
+          <button class="primary-btn" data-action="add-product-to-draft">Añadir producto</button>
+          <button class="secondary-btn" data-action="add-draft-group">Nueva fecha</button>
+        </div>
+      </section>
+
+      <section class="section-card">
+        <div class="section-header">
+          <div>
+            <h2>Resumen provisional</h2>
+            <p>Productos incorporados en la fecha activa.</p>
+          </div>
+          <span class="tag">${products.length} producto(s)</span>
+        </div>
+        ${products.length ? `<div class="product-list">${products.map((p, idx) => renderDraftProduct(p, idx)).join('')}</div>` : renderEmpty('Aún no hay productos', 'Añade el primer producto de esta fecha.')}
+        <div class="button-row" style="margin-top:14px">
+          <button class="primary-btn" data-action="finish-draft">FIN / Guardar tratamiento</button>
+          <button class="danger-btn" data-action="discard-draft" data-id="${escapeAttr(draft.id)}">Descartar borrador</button>
+        </div>
+      </section>
+    `;
+  }
+
+  function renderDraftProduct(item, idx) {
+    return `
+      <article class="draft-product ${item.verificationStatus === 'PENDING' || item.incidence ? 'warning' : ''}">
+        <div class="section-header">
+          <div>
+            <h3>${escapeHtml(item.productName)}</h3>
+            <p>${escapeHtml(item.doseApplied || 'Dosis pendiente')} · ${escapeHtml(String(item.litersPerHa || '—'))} L/ha</p>
+          </div>
+          <span class="tag ${item.verificationStatus === 'PENDING' ? 'pending' : item.incidence ? 'warn' : 'ok'}">${item.verificationStatus === 'PENDING' ? 'A verificar' : item.incidence ? 'Incidencia' : 'Listo'}</span>
+        </div>
+        <div class="button-row">
+          <button class="ghost-btn" data-action="remove-draft-product" data-index="${idx}">Quitar</button>
+        </div>
+      </article>
+    `;
+  }
+
+  function renderLedger() {
+    const filtered = filteredLedgerTreatments();
+    const view = ui.ledgerView;
+    return `
+      <section class="section-card ledger-toolbar">
+        <div class="section-header">
+          <div>
+            <h2>Cuaderno</h2>
+            <p>Vista móvil, tabla completa y presentación tipo PDF.</p>
+          </div>
+        </div>
+        <div class="inline-fields two">
+          <div class="field">
+            <span>Buscar en cuaderno</span>
+            <input data-ledger-field="query" value="${escapeAttr(ui.ledgerQuery)}" placeholder="Producto, lote, observación…">
+          </div>
+          <div class="field">
+            <span>Filtrar fecha</span>
+            <input data-ledger-field="date" type="date" value="${escapeAttr(ui.ledgerDateFilter)}">
+          </div>
+        </div>
+        <div class="tabs">
+          <button class="tab-btn ${view === 'mobile' ? 'active' : ''}" data-action="ledger-view" data-view="mobile">Móvil</button>
+          <button class="tab-btn ${view === 'table' ? 'active' : ''}" data-action="ledger-view" data-view="table">Tabla completa</button>
+          <button class="tab-btn ${view === 'pdf' ? 'active' : ''}" data-action="ledger-view" data-view="pdf">Vista tipo PDF</button>
+        </div>
+        <div class="button-row">
+          <button class="secondary-btn" data-action="export-official-pdf">PDF oficial</button>
+          <button class="ghost-btn" data-action="export-compact-pdf">PDF compacto</button>
+          <button class="ghost-btn" data-action="export-xls">Excel .xls</button>
+          <button class="ghost-btn" data-action="export-csv">CSV</button>
+        </div>
+      </section>
+      ${filtered.length ? renderLedgerView(filtered, view) : renderEmpty('Sin resultados en el cuaderno', 'Ajusta los filtros o importa la carga inicial.')}
+    `;
+  }
+
+  function renderLedgerView(treatments, view) {
+    if (view === 'table') return `<section class="scroll-table">${buildOfficialTable(treatments)}</section>`;
+    if (view === 'pdf') return `<section class="pdf-sheet printable-view">${buildPdfSheet(treatments)}</section>`;
+    const groups = groupTreatmentsByDate(treatments);
+    return groups.map(group => `
+      <section class="ledger-group">
+        <div class="section-header">
+          <div>
+            <h3>N.º ${group.ordinal} · ${formatDate(group.date)}</h3>
+            <p>${group.rows.length} producto(s)</p>
+          </div>
+        </div>
+        <div class="product-list">
+          ${group.rows.map(renderLedgerCard).join('')}
+        </div>
+      </section>
+    `).join('');
+  }
+
+  function renderLedgerCard(row) {
+    const warning = row.verificationStatus === 'PENDING' || containsPending(row.registration) || containsPending(row.safetyPeriod) || Boolean(row.incidence);
+    return `
+      <article class="ledger-row-card ${warning ? 'warning' : ''}">
+        <div class="section-header">
+          <div>
+            <h3>${escapeHtml(row.productName)}</h3>
+            <p>${escapeHtml(row.doseApplied || '—')} · ${escapeHtml(String(row.litersPerHa ?? '—'))} L/ha · ${escapeHtml(row.objective || '—')}</p>
+          </div>
+          <span class="tag ${warning ? 'warn' : 'ok'}">${warning ? 'Advertencia' : 'Correcto'}</span>
+        </div>
+        <div class="kv-grid">
+          <div class="kv"><strong>Lote</strong><span>${escapeHtml(row.lot || '—')}</span></div>
+          <div class="kv"><strong>P.S.</strong><span>${escapeHtml(row.safetyPeriod || '—')}</span></div>
+          <div class="kv"><strong>Campaña</strong><span>${escapeHtml(campaignCountDisplay(row))}</span></div>
+          <div class="kv"><strong>MEZCLA</strong><span>${escapeHtml(row.mixRule || '----')}</span></div>
+        </div>
+        ${row.incidence ? `<div class="warning-block" style="margin-top:10px">${escapeHtml(row.incidence)}</div>` : ''}
+        <div class="button-row" style="margin-top:12px">
+          <button class="ghost-btn" data-action="edit-treatment" data-id="${escapeAttr(row.id)}">Editar</button>
+        </div>
+      </article>
+    `;
+  }
+
+  function renderAlerts() {
+    const active = activeAlerts();
+    const resolved = resolvedAlerts();
+    return `
+      <section class="section-card">
+        <div class="section-header">
+          <div>
+            <h2>Alertas activas</h2>
+            <p>Pendientes técnicos, incidencias, máximos y revisiones documentales.</p>
+          </div>
+          <span class="tag ${active.length ? 'warn' : 'ok'}">${active.length}</span>
+        </div>
+        ${active.length ? `<div class="alert-list">${active.map(renderAlertCard).join('')}</div>` : renderEmpty('Sin alertas activas', 'Las alertas resueltas se conservan en el historial.')}
+      </section>
+      <section class="section-card">
+        <div class="section-header"><div><h2>Historial resuelto</h2><p>Trazabilidad conservada.</p></div><span class="tag">${resolved.length}</span></div>
+        ${resolved.length ? `<div class="alert-list">${resolved.map(renderResolvedAlertCard).join('')}</div>` : renderEmpty('Sin alertas resueltas', 'Aún no hay resoluciones registradas.')}
+      </section>
+    `;
+  }
+
+  function renderAlertCard(alert) {
+    return `
+      <article class="alert-card">
+        <div class="section-header">
+          <div>
+            <h3>${escapeHtml(alert.title || alert.type)}</h3>
+            <p>${escapeHtml(alert.description || '')}</p>
+          </div>
+          <span class="tag warn">${escapeHtml(labelAlertType(alert.type))}</span>
+        </div>
+        <div class="button-row">
+          <button class="primary-btn" data-action="resolve-alert" data-id="${escapeAttr(alert.id)}">Marcar resuelta</button>
+        </div>
+      </article>
+    `;
+  }
+
+  function renderAlertCardMini(alert) {
+    return `
+      <article class="alert-card">
+        <h3>${escapeHtml(alert.title || alert.type)}</h3>
+        <p>${escapeHtml(alert.description || '')}</p>
+      </article>
+    `;
+  }
+
+  function renderResolvedAlertCard(alert) {
+    return `
+      <article class="alert-card" style="border-left-color:#9ab7c2">
+        <div class="section-header">
+          <div>
+            <h3>${escapeHtml(alert.title || alert.type)}</h3>
+            <p>${escapeHtml(alert.description || '')}</p>
+            <p class="muted">Resuelta: ${alert.resolvedAt ? formatDateTime(alert.resolvedAt) : '—'}</p>
+          </div>
+          <span class="tag ok">Resuelta</span>
+        </div>
+      </article>
+    `;
+  }
+
+  function renderMore() {
+    switch (ui.morePanel) {
+      case 'catalog': return renderCatalog();
+      case 'drafts': return renderDraftsPanel();
+      case 'copies': return renderCopiesPanel();
+      case 'settings': return renderSettingsPanel();
+      case 'import': return renderImportPanel();
+      default:
+        return `
+          <section class="section-card">
+            <div class="section-header"><div><h2>Más</h2><p>Catálogo, borradores, copias, importación y ajustes.</p></div></div>
+            <div class="more-grid">
+              <button class="more-tile" data-action="open-more" data-panel="catalog"><strong>Catálogo</strong><span>Productos, verificación y ficha técnica.</span></button>
+              <button class="more-tile" data-action="open-more" data-panel="drafts"><strong>Borradores</strong><span>Retomar o descartar procesos.</span></button>
+              <button class="more-tile" data-action="open-more" data-panel="import"><strong>Importar</strong><span>Carga inicial, CSV, XLS y JSON.</span></button>
+              <button class="more-tile" data-action="open-more" data-panel="copies"><strong>Copias</strong><span>Exportar copia y restaurar.</span></button>
+              <button class="more-tile" data-action="open-more" data-panel="settings"><strong>Ajustes</strong><span>Campaña, aplicador y autocomprobación.</span></button>
+            </div>
+          </section>
+        `;
+    }
+  }
+
+  function renderCatalog() {
+    const products = state.products.slice().sort((a, b) => a.name.localeCompare(b.name, 'es'));
+    return `
+      ${renderBackToMore('Catálogo de productos', 'Verificados, pendientes, activos y archivados.')}
+      <section class="section-card">
+        ${products.length ? `<div class="product-list">${products.map(renderProductCard).join('')}</div>` : renderEmpty('Catálogo vacío', 'Importa la carga inicial o crea productos provisionales desde Nuevo.')}
+      </section>
+    `;
+  }
+
+  function renderProductCard(product) {
+    return `
+      <article class="product-card ${product.verificationStatus === 'PENDING' ? 'warning' : ''}">
+        <div class="section-header">
+          <div>
+            <h3>${escapeHtml(product.name)}</h3>
+            <p>${escapeHtml(product.registration || 'Sin registro')}</p>
+          </div>
+          <span class="tag ${product.verificationStatus === 'VERIFIED' ? 'ok' : 'pending'}">${product.verificationStatus === 'VERIFIED' ? 'Verificado' : 'A verificar'}</span>
+        </div>
+        <div class="product-meta">
+          <span class="tag">Máx.: ${product.maxApplications ?? 'NO CONSTA'}</span>
+          <span class="tag">MEZCLA: ${escapeHtml(product.mixRule || '----')}</span>
+          <span class="tag">Docs: ${(product.documents || []).length}</span>
+        </div>
+        <div class="button-row" style="margin-top:12px">
+          <button class="ghost-btn" data-action="view-product" data-id="${escapeAttr(product.id)}">Ver ficha</button>
+          <button class="secondary-btn" data-action="edit-product" data-id="${escapeAttr(product.id)}">Editar ficha</button>
+        </div>
+      </article>
+    `;
+  }
+
+  function renderDraftsPanel() {
+    const drafts = currentDrafts();
+    return `
+      ${renderBackToMore('Borradores', 'Autoguardado silencioso y recuperación de procesos.')}
+      <section class="section-card">
+        ${drafts.length ? `<div class="product-list">${drafts.map(renderDraftChoice).join('')}</div>` : renderEmpty('Sin borradores', 'Los tratamientos en curso aparecerán aquí.')}
+      </section>
+    `;
+  }
+
+  function renderCopiesPanel() {
+    return `
+      ${renderBackToMore('Copias y restauración', 'Copia completa versionada, restauración por sustituir o fusionar.')}
+      <section class="section-card">
+        <div class="button-row vertical">
+          <button class="primary-btn" data-action="download-backup">Descargar copia completa JSON</button>
+          <label class="secondary-btn" style="display:block;text-align:center">Restaurar copia JSON<input id="restoreFile" type="file" accept=".json,application/json" class="hidden" data-action-change="restore-file"></label>
+        </div>
+        <p class="muted">La restauración permite sustituir o fusionar. Los conflictos en fusión se resuelven antes de sobrescribir.</p>
+      </section>
+    `;
+  }
+
+  function renderSettingsPanel() {
+    const campaign = activeCampaign();
+    return `
+      ${renderBackToMore('Ajustes', 'Campaña, aplicador y autocomprobación funcional.')}
+      <section class="section-card">
+        <div class="field">
+          <span>Campaña activa</span>
+          <input value="${escapeAttr(campaign?.name || 'Campaña 2026')}" readonly>
+        </div>
+        <div class="field">
+          <span>Aplicador por defecto de la campaña</span>
+          <input id="campaignApplicator" value="${escapeAttr(campaign?.applicator || '')}" placeholder="Nombre del aplicador">
+        </div>
+        <div class="button-row" style="margin-top:12px">
+          <button class="primary-btn" data-action="save-applicator">Guardar aplicador</button>
+          <button class="ghost-btn" data-action="run-self-check">Ejecutar autocomprobación</button>
+        </div>
+      </section>
+      <section class="section-card">
+        <h2>Versión</h2>
+        <div class="kv-grid">
+          <div class="kv"><strong>App</strong><span>${APP_VERSION}</span></div>
+          <div class="kv"><strong>Esquema</strong><span>${SCHEMA_VERSION}</span></div>
+          <div class="kv"><strong>Tratamientos</strong><span>${activeTreatments().length}</span></div>
+          <div class="kv"><strong>Alertas activas</strong><span>${activeAlerts().length}</span></div>
+        </div>
+      </section>
+    `;
+  }
+
+  function renderImportPanel() {
+    const preview = ui.importPreview;
+    return `
+      ${renderBackToMore('Importación', 'Carga inicial estructurada, CSV, XLS compatible y JSON.')}
+      <section class="section-card">
+        <label class="primary-btn" style="display:block;text-align:center">Seleccionar archivo<input id="importFile" type="file" accept=".json,.csv,.xls,.xlsx,application/json,text/csv,application/vnd.ms-excel" class="hidden" data-action-change="import-file"></label>
+        <p class="muted">La carga privada de tratamientos debe importarse localmente. La app pública no la contiene.</p>
+      </section>
+      ${preview ? renderImportPreview(preview) : ''}
+    `;
+  }
+
+  function renderImportPreview(preview) {
+    if (preview.kind === 'structured') {
+      const data = preview.data;
+      return `
+        <section class="section-card">
+          <div class="section-header"><div><h2>Vista previa de carga estructurada</h2><p>${escapeHtml(data.sourceDocument || 'Archivo JSON')}</p></div><span class="tag ok">Compatible</span></div>
+          <div class="metric-grid">
+            <article class="metric-card"><strong>${data.products?.length || 0}</strong><span>Productos</span></article>
+            <article class="metric-card"><strong>${data.treatments?.length || 0}</strong><span>Aplicaciones</span></article>
+            <article class="metric-card"><strong>${data.alerts?.length || 0}</strong><span>Alertas</span></article>
+            <article class="metric-card"><strong>${data.summary?.treatmentDates ?? treatmentDatesCount(data.treatments || [])}</strong><span>Fechas</span></article>
+          </div>
+          <div class="button-row" style="margin-top:14px">
+            <button class="primary-btn" data-action="apply-structured-import" data-mode="replace">Importar sustituyendo datos locales</button>
+            <button class="secondary-btn" data-action="apply-structured-import" data-mode="merge">Importar fusionando</button>
+          </div>
+        </section>
+      `;
+    }
+    if (preview.kind === 'tabular') {
+      return `
+        <section class="section-card">
+          <div class="section-header"><div><h2>Vista previa tabular</h2><p>${preview.rows.length} fila(s) leídas. Mapea columnas antes de importar.</p></div><span class="tag pending">Revisar</span></div>
+          <div class="import-preview">${buildPreviewTable(preview.headers, preview.rows.slice(0, 5))}</div>
+          <div class="import-mapping" style="margin-top:14px">
+            ${IMPORT_KEYS.map(([key, label]) => `
+              <div class="field">
+                <span>${escapeHtml(label)}</span>
+                <select data-import-map="${escapeAttr(key)}">
+                  <option value="">— No importar —</option>
+                  ${preview.headers.map(header => `<option value="${escapeAttr(header)}" ${preview.mapping?.[key] === header ? 'selected' : ''}>${escapeHtml(header)}</option>`).join('')}
+                </select>
+              </div>
+            `).join('')}
+          </div>
+          <div class="button-row" style="margin-top:14px">
+            <button class="primary-btn" data-action="apply-tabular-import">Importar filas mapeadas</button>
+          </div>
+        </section>
+      `;
+    }
+    return '';
+  }
+
+  function renderBackToMore(title, subtitle) {
+    return `
+      <section class="section-card">
+        <div class="section-header">
+          <div><h2>${escapeHtml(title)}</h2><p>${escapeHtml(subtitle)}</p></div>
+          <button class="ghost-btn compact" data-action="back-more">Volver</button>
+        </div>
+      </section>
+    `;
+  }
+
+  function renderEmpty(title, text) {
+    return `<div class="empty-card"><strong>${escapeHtml(title)}</strong><span>${escapeHtml(text)}</span></div>`;
+  }
+
+  function handleScreenClick(event) {
+    const btn = event.target.closest('[data-action]');
+    if (!btn) return;
+    const action = btn.dataset.action;
+    if (action === 'go-new') return navigate('new');
+    if (action === 'go-ledger') return navigate('ledger');
+    if (action === 'go-alerts') return navigate('alerts');
+    if (action === 'go-import') { ui.screen = 'more'; ui.morePanel = 'import'; syncNav(); return render(); }
+    if (action === 'open-drafts') { ui.screen = 'more'; ui.morePanel = 'drafts'; syncNav(); return render(); }
+    if (action === 'open-more') { ui.morePanel = btn.dataset.panel; return render(); }
+    if (action === 'back-more') { ui.morePanel = null; return render(); }
+    if (action === 'start-draft') return startDraft();
+    if (action === 'resume-draft') { ui.currentDraftId = btn.dataset.id; ui.screen = 'new'; syncNav(); return render(); }
+    if (action === 'discard-draft') return discardDraft(btn.dataset.id);
+    if (action === 'switch-draft-group') return switchDraftGroup(Number(btn.dataset.index));
+    if (action === 'add-draft-group') return addDraftGroup();
+    if (action === 'add-product-to-draft') return addProductToDraft();
+    if (action === 'remove-draft-product') return removeDraftProduct(Number(btn.dataset.index));
+    if (action === 'finish-draft') return finishDraft();
+    if (action === 'ledger-view') { ui.ledgerView = btn.dataset.view; return render(); }
+    if (action === 'export-official-pdf') return exportOfficialPdf();
+    if (action === 'export-compact-pdf') return exportCompactPdf();
+    if (action === 'export-xls') return exportXls();
+    if (action === 'export-csv') return exportCsv();
+    if (action === 'resolve-alert') return resolveAlert(btn.dataset.id);
+    if (action === 'view-product') return showProductModal(btn.dataset.id);
+    if (action === 'edit-product') return showProductEditChoice(btn.dataset.id);
+    if (action === 'save-applicator') return saveCampaignApplicator();
+    if (action === 'run-self-check') return runSelfCheck();
+    if (action === 'download-backup') return downloadBackup();
+    if (action === 'apply-structured-import') return applyStructuredImport(btn.dataset.mode);
+    if (action === 'apply-tabular-import') return applyTabularImport();
+    if (action === 'edit-treatment') return showEditTreatmentModal(btn.dataset.id);
+  }
+
+  function handleModalHostClick(event) {
+    const btn = event.target.closest('[data-modal-action]');
+    if (!btn) return;
+    const action = btn.dataset.modalAction;
+    if (action === 'view-product-doc') return showProductDocumentViewer(btn.dataset.productId, btn.dataset.docId);
+    if (action === 'zoom-product-doc-image') return showProductImageZoomViewer(btn.dataset.productId, btn.dataset.docId);
+    if (action === 'delete-product-doc') return deleteProductDocument(btn.dataset.productId, btn.dataset.docId);
+    if (action === 'add-product-docs') {
+      els.modalHost.innerHTML = '';
+      return showProductDocumentIntakeModal(btn.dataset.productId);
+    }
+  }
+
+  function handleModalHostChange(event) {
+    const reviewVolumeField = event.target.dataset.reviewVolumeField;
+    if (reviewVolumeField === 'volumeReference.mode') {
+      return syncReviewVolumeReferencePanels(event.target.closest('[data-review-volume-editor="volumeReference"]'), event.target.value || '');
+    }
+    const reviewVolumeRuleField = event.target.dataset.reviewRuleField;
+    if (reviewVolumeRuleField === 'volumeRule.mode') {
+      return syncReviewVolumeRulePanels(event.target.closest('[data-review-rule="volumeRule"]'), event.target.value || '');
+    }
+    if (event.target.id === 'editProductVolumeMode') {
+      return syncEditProductVolumePanels(event.target.value || '');
+    }
+  }
+
+  function handleScreenInput(event) {
+    const draftField = event.target.dataset.draftField;
+    const pendingField = event.target.dataset.pendingField;
+    const ledgerField = event.target.dataset.ledgerField;
+    if (draftField) updateDraftField(draftField, event.target);
+    if (pendingField) updatePendingField(pendingField, event.target);
+    if (ledgerField === 'query') { ui.ledgerQuery = event.target.value || ''; renderLedgerResultsWithoutLosingFocus(); }
+    if (ledgerField === 'date') { ui.ledgerDateFilter = event.target.value || ''; render(); }
+  }
+
+  function handleScreenChange(event) {
+    const changeAction = event.target.dataset.actionChange;
+    if (changeAction === 'import-file') return readImportFile(event.target.files?.[0]);
+    if (changeAction === 'restore-file') return readRestoreFile(event.target.files?.[0]);
+    const pendingField = event.target.dataset.pendingField;
+    const draftField = event.target.dataset.draftField;
+    if (draftField) updateDraftField(draftField, event.target);
+    if (pendingField) updatePendingField(pendingField, event.target);
+    const importMap = event.target.dataset.importMap;
+    if (importMap && ui.importPreview?.kind === 'tabular') {
+      ui.importPreview.mapping ||= {};
+      ui.importPreview.mapping[importMap] = event.target.value || '';
+    }
+  }
+
+  function renderLedgerResultsWithoutLosingFocus() {
+    const focused = document.activeElement;
+    const selection = focused && typeof focused.selectionStart === 'number' ? [focused.selectionStart, focused.selectionEnd] : null;
+    render();
+    const replacement = els.screen.querySelector('[data-ledger-field="query"]');
+    if (replacement) {
+      replacement.focus({ preventScroll: true });
+      if (selection) replacement.setSelectionRange(selection[0], selection[1]);
+    }
+  }
+
+  function startDraft() {
+    const now = new Date().toISOString();
+    const campaign = activeCampaign();
+    const draft = {
+      id: `d_${cryptoRandom()}`,
+      campaignId: state.activeCampaignId,
+      applicator: campaign?.applicator || '',
+      groups: [{ id: `g_${cryptoRandom()}`, date: '', dateText: '', products: [] }],
+      currentGroupIndex: 0,
+      pendingProduct: emptyPendingProduct(),
+      createdAt: now,
+      updatedAt: now
+    };
+    state.drafts.push(draft);
+    ui.currentDraftId = draft.id;
+    saveState();
+    render();
+  }
+
+  function emptyPendingProduct() {
+    return {
+      productName: '',
+      lot: '',
+      doseApplied: '',
+      litersPerHa: '',
+      crop: 'Vid de vinificación',
+      objective: '',
+      observations: '',
+      hasIncidence: false,
+      incidenceText: ''
+    };
+  }
+
+  function currentDraft() {
+    return state.drafts.find(d => d.id === ui.currentDraftId);
+  }
+
+  function currentDraftGroup(draft = currentDraft()) {
+    return draft?.groups?.[draft.currentGroupIndex || 0];
+  }
+
+  async function discardDraft(id) {
+    const first = await confirmDialog('Descartar borrador', 'Primera confirmación: se perderá este borrador.', 'Continuar', 'Cancelar');
+    if (!first) return;
+    const second = await confirmDialog('Confirmación final', 'Segunda confirmación: el borrador se eliminará definitivamente.', 'Descartar', 'Cancelar');
+    if (!second) return;
+    state.drafts = state.drafts.filter(d => d.id !== id);
+    if (ui.currentDraftId === id) ui.currentDraftId = null;
+    await saveState();
+    toast('Borrador descartado.');
+    render();
+  }
+
+  function switchDraftGroup(index) {
+    const draft = currentDraft();
+    if (!draft || !draft.groups[index]) return;
+    draft.currentGroupIndex = index;
+    draft.updatedAt = new Date().toISOString();
+    saveState();
+    render();
+  }
+
+  function addDraftGroup() {
+    const draft = currentDraft();
+    if (!draft) return;
+    const group = currentDraftGroup(draft);
+    if (!group?.date) {
+      toast('Completa la fecha actual antes de abrir una nueva.');
+      return;
+    }
+    draft.groups.push({ id: `g_${cryptoRandom()}`, date: '', dateText: '', products: [] });
+    draft.currentGroupIndex = draft.groups.length - 1;
+    draft.pendingProduct = emptyPendingProduct();
+    draft.updatedAt = new Date().toISOString();
+    saveState();
+    render();
+  }
+
+  async function updateDraftField(field, target) {
+    const draft = currentDraft();
+    if (!draft) return;
+    const group = currentDraftGroup(draft);
+    if (field === 'dateText') {
+      group.dateText = target.value || '';
+      const parsed = textDateToIso(group.dateText);
+      if (parsed) group.date = parsed;
+    }
+    if (field === 'datePicker') {
+      group.date = target.value || '';
+      group.dateText = group.date ? isoToTextDate(group.date) : '';
+      if (group.date) {
+        const dateTextInput = els.screen.querySelector('[data-draft-field="dateText"]');
+        if (dateTextInput) dateTextInput.value = group.dateText;
+      }
+    }
+    if (field === 'applicator') draft.applicator = target.value || '';
+    draft.updatedAt = new Date().toISOString();
+    await saveState();
+  }
+
+  async function updatePendingField(field, target) {
+    const draft = currentDraft();
+    if (!draft) return;
+    draft.pendingProduct ||= emptyPendingProduct();
+    if (field === 'hasIncidence') {
+      draft.pendingProduct.hasIncidence = Boolean(target.checked);
+      if (!target.checked) draft.pendingProduct.incidenceText = '';
+      await saveState();
+      render();
+      return;
+    }
+    draft.pendingProduct[field] = target.value || '';
+    if (field === 'productName') {
+      const product = findProductByName(target.value || '');
+      if (product) {
+        if (!draft.pendingProduct.objective && product.allowedObjectives?.length === 1) draft.pendingProduct.objective = product.allowedObjectives[0];
+        if (!draft.pendingProduct.crop && product.allowedUses?.length === 1) draft.pendingProduct.crop = product.allowedUses[0];
+      }
+    }
+    draft.updatedAt = new Date().toISOString();
+    await saveState();
+  }
+
+  async function addProductToDraft() {
+    const draft = currentDraft();
+    const group = currentDraftGroup(draft);
+    if (!draft || !group) return;
+    const dateOk = await validateGroupDate(group);
+    if (!dateOk) return;
+    const p = { ...(draft.pendingProduct || emptyPendingProduct()) };
+    if (!p.productName?.trim()) return toast('Indica el producto.');
+    if (!p.lot?.trim()) return toast('Indica el lote o NO PROCEDE.');
+    if (!p.doseApplied?.trim()) return toast('Indica la dosis aplicada.');
+    if (!p.litersPerHa?.trim()) return toast('Indica los litros/ha aplicados.');
+    if (!p.crop?.trim()) return toast('Indica cultivo / uso.');
+    if (!p.objective?.trim()) return toast('Indica plaga, patógeno u objetivo.');
+    if (group.products.some(item => normalizeText(item.productName) === normalizeText(p.productName))) {
+      return toast('Ese producto ya está registrado en la misma fecha.');
+    }
+
+    let product = findProductByName(p.productName);
+    if (!product) {
+      const ok = await confirmDialog('Producto provisional', 'No existe en el catálogo. Se creará como A verificar.', 'Crear provisional', 'Cancelar');
+      if (!ok) return;
+      product = createProvisionalProduct(p.productName, p.crop, p.objective);
+      state.products.push(product);
+    }
+
+    const validation = validateEntryAgainstProduct(product, p.doseApplied, p.litersPerHa);
+    let incidence = p.hasIncidence ? (p.incidenceText || 'Incidencia registrada manualmente.') : '';
+    if (!validation.ok) {
+      const keep = await confirmDialog(
+        'Validación técnica',
+        `<p>${validation.messages.map(escapeHtml).join('<br>')}</p><p>¿Conservar el dato como incidencia controlada?</p>`,
+        'Conservar con incidencia',
+        'Corregir'
+      );
+      if (!keep) return;
+      incidence = [incidence, ...validation.messages].filter(Boolean).join(' | ');
+    }
+
+    const entry = buildDraftProductEntry(product, p, incidence);
+    group.products.push(entry);
+    draft.pendingProduct = emptyPendingProduct();
+    draft.updatedAt = new Date().toISOString();
+    await saveState();
+    toast('Producto añadido al borrador.');
+    render();
+  }
+
+  function buildDraftProductEntry(product, pending, incidence) {
+    return {
+      tempId: `dp_${cryptoRandom()}`,
+      productId: product.id,
+      productName: product.name,
+      registration: product.registration || 'A verificar',
+      lot: pending.lot.trim(),
+      doseReference: product.doseReference || 'A verificar',
+      doseApplied: pending.doseApplied.trim(),
+      volumeReference: product.volumeReference || 'A verificar',
+      litersPerHa: normalizeNumericString(pending.litersPerHa),
+      crop: pending.crop.trim(),
+      objective: pending.objective.trim(),
+      safetyPeriod: product.safetyPeriod || 'A verificar',
+      activeIngredients: product.activeIngredients || 'A verificar',
+      mixRule: product.mixRule || 'A verificar',
+      verificationStatus: product.verificationStatus || 'PENDING',
+      observations: pending.observations?.trim() || '',
+      incidence: incidence || '',
+      snapshot: buildSnapshot(product)
+    };
+  }
+
+  async function removeDraftProduct(index) {
+    const draft = currentDraft();
+    const group = currentDraftGroup(draft);
+    if (!group?.products?.[index]) return;
+    group.products.splice(index, 1);
+    draft.updatedAt = new Date().toISOString();
+    await saveState();
+    render();
+  }
+
+  async function finishDraft() {
+    const draft = currentDraft();
+    if (!draft) return;
+    for (const group of draft.groups) {
+      const dateOk = await validateGroupDate(group);
+      if (!dateOk) return;
+      if (!group.products?.length) return toast(`La fecha ${group.date ? formatDate(group.date) : 'pendiente'} no tiene productos.`);
+      const hasSolo = group.products.some(p => p.mixRule === 'SOLO');
+      if (hasSolo && group.products.length > 1) {
+        const ok = await confirmDialog(
+          'Regla SOLO',
+          `Hay un producto marcado SOLO en ${formatDate(group.date)} junto con otros productos. Confirma que se aplicó en cubas distintas o mediante una gestión equivalente.`,
+          'Confirmar gestión separada',
+          'Cancelar'
+        );
+        if (!ok) return;
+      }
+    }
+
+    const now = new Date().toISOString();
+    const campaign = activeCampaign();
+    const createdTreatments = [];
+    const createdAlerts = [];
+    for (const group of draft.groups) {
+      for (const entry of group.products) {
+        const treatment = {
+          id: `t_${cryptoRandom()}`,
+          campaignId: state.activeCampaignId,
+          date: group.date,
+          applicator: draft.applicator || campaign?.applicator || '',
+          productId: entry.productId,
+          productName: entry.productName,
+          registration: entry.registration,
+          lot: entry.lot,
+          doseReference: entry.doseReference,
+          doseApplied: entry.doseApplied,
+          volumeReference: entry.volumeReference,
+          litersPerHa: Number(entry.litersPerHa) || entry.litersPerHa,
+          crop: entry.crop,
+          objective: entry.objective,
+          safetyPeriod: entry.safetyPeriod,
+          activeIngredients: entry.activeIngredients,
+          mixRule: entry.mixRule,
+          verificationStatus: entry.verificationStatus,
+          observations: entry.observations,
+          incidence: entry.incidence,
+          snapshot: entry.snapshot,
+          createdAt: now,
+          updatedAt: now
+        };
+        createdTreatments.push(treatment);
+        if (treatment.verificationStatus === 'PENDING' || containsPending(treatment.registration) || containsPending(treatment.doseReference) || containsPending(treatment.volumeReference) || containsPending(treatment.safetyPeriod)) {
+          createdAlerts.push(buildAlert('A_VERIFY', `Tratamiento A verificar: ${treatment.productName}`, `Registro del ${formatDate(treatment.date)} con campos pendientes técnicos.`, treatment.productId, treatment.id));
         }
-        if(r.limitHa!==null){ const ha=dosePerHa(a); if(ha!==null && ha>Number(r.limitHa)) issues.push({id:'limitHa',severity:'blocking',text:`La equivalencia por hectárea supera el límite ${r.limitHa}.`}); }
-        if(l!==null && vr.kind==='single' && vr.value!==null && l!==Number(vr.value)) issues.push({id:'volSingle',severity:'blocking',text:`El volumen debe ser ${vr.value} L/ha.`});
-        if(l!==null && vr.kind==='range'){
-          if(vr.min!==null && l<Number(vr.min)) issues.push({id:'volMin',severity:'blocking',text:`El volumen queda por debajo de ${vr.min} L/ha.`});
-          if(vr.max!==null && l>Number(vr.max)) issues.push({id:'volMax',severity:'blocking',text:`El volumen supera ${vr.max} L/ha.`});
-        }
-        const max=num(u.maxApplications);
-        if(max!==null){
-          const already=apps().filter(x=>x.app.productId===a.productId).length;
-          const inDraft=g?.applications?.filter(x=>x.productId===a.productId && x.id!==a.id).length || 0;
-          if(already+inDraft+1>max) issues.push({id:'maxApps',severity:'blocking',text:`Se supera el máximo de ${max} aplicaciones por campaña.`});
+        if (treatment.incidence) {
+          createdAlerts.push(buildAlert('INCIDENT', `Incidencia: ${treatment.productName}`, treatment.incidence, treatment.productId, treatment.id));
         }
       }
     }
-    return issues;
+    state.treatments.push(...createdTreatments);
+    state.alerts.push(...createdAlerts);
+    state.drafts = state.drafts.filter(d => d.id !== draft.id);
+    ui.currentDraftId = null;
+    await saveState();
+    toast('Tratamiento guardado.');
+    ui.screen = 'ledger';
+    ui.ledgerView = 'mobile';
+    syncNav();
+    render();
   }
-  function blockers(issues){ return issues.filter(i=>i.severity==='blocking'); }
-  function alertList(){
-    const out=[];
-    state.products.filter(p=>!p.archived && p.status!=='verified').forEach(p=>out.push({id:`prod_${p.id}`,tone:'warning',title:`${p.name}: ficha A verificar`,detail:'Faltan datos técnicos obligatorios.',productId:p.id,resolvable:false}));
-    apps().forEach(({intervention,app})=>{
-      const p=product(app.productId);
-      validate(app,{date:intervention.date,futureConfirmed:true}).filter(i=>i.id!=='future').forEach(i=>out.push({id:`val_${intervention.id}_${app.id}_${i.id}`,tone:i.severity==='blocking'?'danger':'warning',title:`${p?.name || app.productNameSnapshot || 'Aplicación'} · ${fmtDate(intervention.date)}`,detail:i.text,resolvable:false}));
-      if(String(app.incidence||'').trim()){
-        const id=`inc_${intervention.id}_${app.id}`;
-        if(!state.resolvedAlerts.includes(id)) out.push({id,tone:'danger',title:`${p?.name || app.productNameSnapshot || 'Aplicación'} · incidencia`,detail:app.incidence,resolvable:true});
+
+  async function validateGroupDate(group) {
+    const iso = group.date || textDateToIso(group.dateText || '');
+    if (!iso) {
+      toast('Indica una fecha válida en formato dd/mm/aaaa o calendario.');
+      return false;
+    }
+    group.date = iso;
+    if (isFutureDate(iso)) {
+      const first = await confirmDialog('Fecha futura', `La fecha ${formatDate(iso)} es posterior a hoy. Primera confirmación requerida.`, 'Continuar', 'Corregir');
+      if (!first) return false;
+      const second = await confirmDialog('Doble verificación', 'Segunda confirmación: conservar fecha futura bajo advertencia.', 'Confirmar fecha futura', 'Cancelar');
+      if (!second) return false;
+    }
+    return true;
+  }
+
+  function createProvisionalProduct(name, crop, objective) {
+    const now = new Date().toISOString();
+    return {
+      id: `p_${cryptoRandom()}`,
+      name: name.trim(),
+      registration: 'A verificar',
+      verificationStatus: 'PENDING',
+      doseReference: 'A verificar',
+      doseRule: { mode: 'pending' },
+      volumeReference: 'A verificar',
+      volumeRule: { mode: 'pending' },
+      safetyPeriod: 'A verificar',
+      maxApplications: null,
+      activeIngredients: 'A verificar',
+      mixRule: 'A verificar',
+      applicationInterval: '',
+      applicationStage: '',
+      allowedUses: crop ? [crop.trim()] : [],
+      allowedObjectives: objective ? [objective.trim()] : [],
+      nonPhytosanitary: false,
+      archived: false,
+      verifiedAt: null,
+      source: 'Alta provisional desde la app',
+      notes: '',
+      createdAt: now,
+      updatedAt: now
+    };
+  }
+
+  function buildSnapshot(product) {
+    return {
+      doseReference: product.doseReference || 'A verificar',
+      volumeReference: product.volumeReference || 'A verificar',
+      safetyPeriod: product.safetyPeriod || 'A verificar',
+      activeIngredients: product.activeIngredients || 'A verificar',
+      mixRule: product.mixRule || 'A verificar',
+      verificationStatus: product.verificationStatus || 'PENDING',
+      registration: product.registration || 'A verificar',
+      maxApplications: product.maxApplications ?? null,
+      doseRule: deepClone(product.doseRule || { mode: 'pending' }),
+      volumeRule: deepClone(product.volumeRule || { mode: 'pending' })
+    };
+  }
+
+  function validateEntryAgainstProduct(product, doseApplied, litersPerHa) {
+    if (!product || product.verificationStatus !== 'VERIFIED') return { ok: true, messages: [] };
+    const dose = parseDose(doseApplied);
+    const liters = Number(normalizeNumericString(litersPerHa));
+    const messages = [];
+    if (!dose || !Number.isFinite(dose.value)) messages.push('No se puede interpretar la dosis aplicada.');
+    if (!Number.isFinite(liters) || liters <= 0) messages.push('Los litros/ha no son válidos.');
+    if (messages.length) return { ok: false, messages };
+
+    const rule = product.doseRule || { mode: 'pending' };
+    const volumeRule = product.volumeRule || { mode: 'pending' };
+    if (volumeRule.mode === 'fixed' && !nearlyEqual(liters, Number(volumeRule.value))) {
+      messages.push(`Litros/ha distintos del volumen único: ${liters} frente a ${volumeRule.value} ${volumeRule.unit}.`);
+    }
+    if (volumeRule.mode === 'range' && (liters < volumeRule.min || liters > volumeRule.max)) {
+      messages.push(`Litros/ha fuera de rango: ${liters} frente a ${volumeRule.min}-${volumeRule.max} ${volumeRule.unit}.`);
+    }
+
+    const normalized = normalizeDoseForRule(dose, rule);
+    switch (rule.mode) {
+      case 'fixed': {
+        const expected = Number(rule.value);
+        if (!nearlyEqual(normalized.ruleValue, expected)) messages.push(`Dosis distinta de la dosis única: ${normalized.ruleValue ?? dose.value} frente a ${expected} ${rule.displayUnit}.`);
+        break;
+      }
+      case 'concentration_range_with_ha_limit': {
+        const concPercent = doseToPercentPer100L(dose, liters);
+        const perHa = doseToPerHaValue(dose, rule.perHaLimitUnit);
+        if (!Number.isFinite(concPercent) || concPercent < rule.min || concPercent > rule.max) {
+          messages.push(`Concentración calculada fuera de rango: ${formatDecimal(concPercent)} % frente a ${rule.min}-${rule.max} %.`);
+        }
+        if (!Number.isFinite(perHa) || perHa > rule.perHaLimit) {
+          messages.push(`Límite por hectárea superado o no verificable: ${formatDecimal(perHa)} ${rule.perHaLimitUnit} frente a máximo ${rule.perHaLimit} ${rule.perHaLimitUnit}.`);
+        }
+        break;
+      }
+      case 'concentration_hl_range_with_ha_limit': {
+        const conc = doseToConcentrationPerHl(dose, liters, rule.displayUnit);
+        const perHa = doseToPerHaValue(dose, rule.perHaLimitUnit);
+        if (!Number.isFinite(conc) || conc < rule.min || conc > rule.max) {
+          messages.push(`Concentración calculada fuera de rango: ${formatDecimal(conc)} ${rule.displayUnit} frente a ${rule.min}-${rule.max} ${rule.displayUnit}.`);
+        }
+        if (!Number.isFinite(perHa) || perHa > rule.perHaLimit) {
+          messages.push(`Límite por hectárea superado o no verificable: ${formatDecimal(perHa)} ${rule.perHaLimitUnit} frente a máximo ${rule.perHaLimit} ${rule.perHaLimitUnit}.`);
+        }
+        break;
+      }
+      case 'concentration_fixed_with_ha_limit': {
+        const concPercent = doseToPercentPer100L(dose, liters);
+        const perHa = doseToPerHaValue(dose, rule.perHaLimitUnit);
+        if (!Number.isFinite(concPercent) || !nearlyEqual(concPercent, rule.value)) {
+          messages.push(`Concentración calculada distinta de la referencia: ${formatDecimal(concPercent)} % frente a ${rule.value} %.`);
+        }
+        if (!Number.isFinite(perHa) || perHa > rule.perHaLimit) {
+          messages.push(`Límite por hectárea superado o no verificable: ${formatDecimal(perHa)} ${rule.perHaLimitUnit} frente a máximo ${rule.perHaLimit} ${rule.perHaLimitUnit}.`);
+        }
+        break;
+      }
+      case 'concentration_hl_range': {
+        const conc = doseToDeclaredConcentration(dose, rule.displayUnit);
+        if (!Number.isFinite(conc) || conc < rule.min || conc > rule.max) {
+          messages.push(`Dosis fuera de rango: ${formatDecimal(conc)} ${rule.displayUnit} frente a ${rule.min}-${rule.max} ${rule.displayUnit}.`);
+        }
+        break;
+      }
+      default:
+        break;
+    }
+
+    return { ok: messages.length === 0, messages };
+  }
+
+  function parseDose(raw) {
+    const text = String(raw || '').trim().replace(/,/g, '.');
+    const match = text.match(/(-?\d+(?:\.\d+)?)\s*(.*)$/i);
+    if (!match) return null;
+    return { value: Number(match[1]), unit: normalizeUnit(match[2] || '') };
+  }
+
+  function normalizeUnit(unit) {
+    return String(unit || '')
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, '')
+      .replace('litros', 'l')
+      .replace('l/ha', 'l/ha')
+      .replace('kg/ha', 'kg/ha')
+      .replace('cc/ha', 'cc/ha')
+      .replace('ml/ha', 'cc/ha')
+      .replace('g/100l', 'g/100l')
+      .replace('g/hl', 'g/hl')
+      .replace('cc/hl', 'cc/hl')
+      .replace('ml/hl', 'cc/hl')
+      .replace('%', '%');
+  }
+
+  function normalizeDoseForRule(dose, rule) {
+    if (!dose || !rule) return { ruleValue: null };
+    if (rule.mode === 'fixed') {
+      if (rule.displayUnit === 'L/ha' && dose.unit === 'cc/ha') return { ruleValue: dose.value / 1000 };
+      if (rule.displayUnit === 'kg/ha' && dose.unit === 'g/ha') return { ruleValue: dose.value / 1000 };
+      return { ruleValue: dose.value };
+    }
+    return { ruleValue: dose.value };
+  }
+
+  function doseToPerHaValue(dose, targetUnit) {
+    if (!dose) return NaN;
+    if (targetUnit === 'kg/ha') {
+      if (dose.unit === 'kg/ha') return dose.value;
+      if (dose.unit === 'g/ha') return dose.value / 1000;
+    }
+    if (targetUnit === 'L/ha') {
+      if (dose.unit === 'l/ha') return dose.value;
+      if (dose.unit === 'cc/ha') return dose.value / 1000;
+    }
+    return NaN;
+  }
+
+  function doseToPercentPer100L(dose, litersPerHa) {
+    if (!dose || !Number.isFinite(litersPerHa) || litersPerHa <= 0) return NaN;
+    if (dose.unit === '%') return dose.value;
+    if (dose.unit === 'kg/ha') return dose.value / litersPerHa * 100;
+    if (dose.unit === 'l/ha') return dose.value / litersPerHa * 100;
+    if (dose.unit === 'cc/ha') return (dose.value / 1000) / litersPerHa * 100;
+    return NaN;
+  }
+
+  function doseToConcentrationPerHl(dose, litersPerHa, displayUnit) {
+    if (!dose || !Number.isFinite(litersPerHa) || litersPerHa <= 0) return NaN;
+    if (displayUnit.toLowerCase().includes('g') && dose.unit === 'kg/ha') return dose.value * 1000 / litersPerHa * 100;
+    if (displayUnit.toLowerCase().includes('g') && dose.unit === 'g/ha') return dose.value / litersPerHa * 100;
+    if (displayUnit.toLowerCase().includes('cc') && dose.unit === 'l/ha') return dose.value * 1000 / litersPerHa * 100;
+    if (displayUnit.toLowerCase().includes('cc') && dose.unit === 'cc/ha') return dose.value / litersPerHa * 100;
+    if ((displayUnit === 'g/hL' || displayUnit === 'g/100 L') && dose.unit === 'g/hl') return dose.value;
+    if ((displayUnit === 'cc/hL' || displayUnit === 'cc/100 L') && dose.unit === 'cc/hl') return dose.value;
+    return NaN;
+  }
+
+  function doseToDeclaredConcentration(dose, displayUnit) {
+    if (!dose) return NaN;
+    const display = String(displayUnit || '').toLowerCase();
+    if (display.includes('g') && dose.unit === 'g/hl') return dose.value;
+    if (display.includes('cc') && dose.unit === 'cc/hl') return dose.value;
+    return NaN;
+  }
+
+  function nearlyEqual(a, b) {
+    if (!Number.isFinite(a) || !Number.isFinite(b)) return false;
+    return Math.abs(a - b) <= Math.max(0.0001, Math.abs(b) * 0.0005);
+  }
+
+  function findProductByName(name) {
+    const needle = normalizeText(name);
+    return state.products.find(product => normalizeText(product.name) === needle);
+  }
+
+  function findProduct(id) {
+    return state.products.find(p => p.id === id);
+  }
+
+  function findTreatment(id) {
+    return state.treatments.find(t => t.id === id);
+  }
+
+  function recentProductsFirst() {
+    const usage = new Map();
+    activeTreatments().slice().sort(sortTreatmentDesc).forEach((row, idx) => {
+      if (!usage.has(row.productName)) usage.set(row.productName, idx);
+    });
+    return state.products.slice().sort((a, b) => {
+      const ai = usage.has(a.name) ? usage.get(a.name) : Number.MAX_SAFE_INTEGER;
+      const bi = usage.has(b.name) ? usage.get(b.name) : Number.MAX_SAFE_INTEGER;
+      if (ai !== bi) return ai - bi;
+      return a.name.localeCompare(b.name, 'es');
+    });
+  }
+
+  function filteredLedgerTreatments() {
+    const q = normalizeText(ui.ledgerQuery);
+    return activeTreatments().filter(row => {
+      if (ui.ledgerDateFilter && row.date !== ui.ledgerDateFilter) return false;
+      if (!q) return true;
+      const haystack = normalizeText([
+        row.productName, row.registration, row.lot, row.doseApplied, row.crop, row.objective,
+        row.safetyPeriod, row.activeIngredients, row.mixRule, row.observations, row.incidence
+      ].join(' '));
+      return haystack.includes(q);
+    }).sort(sortTreatmentAsc);
+  }
+
+  function renderGlobalSearchResults() {
+    const q = normalizeText(ui.searchQuery);
+    if (!q) {
+      els.globalSearchResults.innerHTML = '';
+      els.globalSearchResults.classList.add('hidden');
+      return;
+    }
+    const treatments = activeTreatments().filter(row => normalizeText([
+      row.productName, row.registration, row.lot, row.objective, row.observations, row.incidence
+    ].join(' ')).includes(q)).slice(0, 5);
+    const products = state.products.filter(product => normalizeText([
+      product.name, product.registration, product.activeIngredients, product.notes
+    ].join(' ')).includes(q)).slice(0, 5);
+    const alerts = activeAlerts().filter(alert => normalizeText([
+      alert.title, alert.description, alert.type
+    ].join(' ')).includes(q)).slice(0, 5);
+    const items = [
+      ...treatments.map(row => `<button class="search-result" data-search-target="treatment" data-search-id="${escapeAttr(row.id)}"><strong>Tratamiento: ${escapeHtml(row.productName)}</strong><small>${formatDate(row.date)} · ${escapeHtml(row.objective || '')}</small></button>`),
+      ...products.map(product => `<button class="search-result" data-search-target="product" data-search-id="${escapeAttr(product.id)}"><strong>Producto: ${escapeHtml(product.name)}</strong><small>${escapeHtml(product.registration || '')}</small></button>`),
+      ...alerts.map(alert => `<button class="search-result" data-search-target="alert" data-search-id="${escapeAttr(alert.id)}"><strong>Alerta: ${escapeHtml(alert.title || alert.type)}</strong><small>${escapeHtml(alert.description || '')}</small></button>`)
+    ];
+    els.globalSearchResults.innerHTML = items.length ? items.join('') : `<div class="search-result"><strong>Sin coincidencias</strong><small>No hay resultados para la búsqueda.</small></div>`;
+    els.globalSearchResults.classList.remove('hidden');
+  }
+
+  function treatmentDatesCount(rows) {
+    return new Set((rows || []).map(row => row.date)).size;
+  }
+
+  function sortTreatmentAsc(a, b) {
+    return `${a.date}|${a.createdAt || ''}|${a.id}`.localeCompare(`${b.date}|${b.createdAt || ''}|${b.id}`);
+  }
+
+  function sortTreatmentDesc(a, b) {
+    return sortTreatmentAsc(b, a);
+  }
+
+  function groupTreatmentsByDate(rows) {
+    const sorted = rows.slice().sort(sortTreatmentAsc);
+    const ordinals = ordinalMapForRows(activeTreatments());
+    const map = new Map();
+    sorted.forEach(row => {
+      if (!map.has(row.date)) map.set(row.date, { date: row.date, ordinal: ordinals.get(row.date), rows: [] });
+      map.get(row.date).rows.push(row);
+    });
+    return Array.from(map.values());
+  }
+
+  function ordinalMapForRows(rows) {
+    const dates = Array.from(new Set(rows.map(row => row.date))).sort();
+    return new Map(dates.map((date, idx) => [date, idx + 1]));
+  }
+
+  function campaignCountDisplay(row) {
+    if (row.verificationStatus === 'PENDING' || containsPending(row.snapshot?.maxApplications) || containsPending(row.registration)) return 'A verificar';
+    const product = findProduct(row.productId);
+    const max = row.snapshot?.maxApplications ?? product?.maxApplications;
+    if (max === null || max === undefined || max === '' || String(max).toUpperCase() === 'NO CONSTA') return 'NO CONSTA';
+    const same = activeTreatments().slice().sort(sortTreatmentAsc).filter(t => t.productId === row.productId);
+    const idx = same.findIndex(t => t.id === row.id);
+    return idx >= 0 ? `${idx + 1}/${max}` : `—/${max}`;
+  }
+
+  function buildOfficialTable(rows) {
+    const ordinals = ordinalMapForRows(activeTreatments());
+    const head = OFFICIAL_COLUMNS.map(([, label]) => `<th>${escapeHtml(label)}</th>`).join('');
+    const body = rows.slice().sort(sortTreatmentAsc).map(row => {
+      const values = officialValues(row, ordinals);
+      return `<tr>${OFFICIAL_COLUMNS.map(([key]) => {
+        const val = values[key];
+        const warning = isWarningCell(row, key, val);
+        return `<td class="${warning ? 'warning-cell' : ''} ${['productName','activeIngredients','doseReference','volumeReference'].includes(key) ? 'text-left' : ''}">${escapeHtml(String(val ?? '—'))}</td>`;
+      }).join('')}</tr>`;
+    }).join('');
+    return `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+  }
+
+  function buildPdfSheet(rows) {
+    const campaign = activeCampaign();
+    return `
+      <div class="pdf-title">CUADERNO DE TRATAMIENTOS. ${escapeHtml(campaign?.name?.toUpperCase() || 'CAMPAÑA 2026')}</div>
+      <div class="pdf-applicator">Nombre del aplicador: ${escapeHtml(campaign?.applicator || 'PENDIENTE')}</div>
+      <div class="scroll-table"><div class="pdf-table">${buildOfficialTable(rows)}</div></div>
+      <p class="caption">Exportación local desde la app Cuaderno de Tratamientos.</p>
+    `;
+  }
+
+  function officialValues(row, ordinals) {
+    return {
+      ordinal: ordinals.get(row.date) || '—',
+      date: formatDate(row.date),
+      productName: row.productName || '—',
+      registration: row.registration || '—',
+      lot: row.lot || '—',
+      doseReference: row.doseReference || '—',
+      doseApplied: row.doseApplied || '—',
+      volumeReference: row.volumeReference || '—',
+      litersPerHa: row.litersPerHa ?? '—',
+      crop: row.crop || '—',
+      objective: row.objective || '—',
+      safetyPeriod: row.safetyPeriod || '—',
+      campaignCount: campaignCountDisplay(row),
+      activeIngredients: row.activeIngredients || '—',
+      mixRule: row.mixRule || '----'
+    };
+  }
+
+  function isWarningCell(row, key, value) {
+    if (row.incidence) return true;
+    if (row.verificationStatus === 'PENDING') return true;
+    return containsPending(value) || (key === 'mixRule' && String(value) === 'A verificar');
+  }
+
+  function containsPending(value) {
+    return /a verificar|pendiente/i.test(String(value ?? ''));
+  }
+
+  async function resolveAlert(id) {
+    const alert = state.alerts.find(a => a.id === id);
+    if (!alert) return;
+    if (alert.type === 'A_VERIFY' && alertStillPending(alert)) {
+      showInfoModal(
+        'No se puede resolver todavía',
+        '<p>Esta alerta sigue vinculada a campos <strong>A verificar</strong>. Completa la ficha del producto o el tratamiento correspondiente. La alerta se resolverá automáticamente cuando ya no quede pendiente técnico.</p>'
+      );
+      return;
+    }
+    const ok = await confirmDialog('Resolver alerta', `¿Marcar como resuelta: ${escapeHtml(alert.title || alert.type)}?`, 'Resolver', 'Cancelar');
+    if (!ok) return;
+    markAlertResolved(alert, 'MANUAL');
+    await saveState();
+    toast('Alerta resuelta.');
+    render();
+  }
+
+  function markAlertResolved(alert, mode = 'AUTO') {
+    if (!alert || alert.status === 'RESOLVED') return;
+    alert.status = 'RESOLVED';
+    alert.resolvedAt = new Date().toISOString();
+    alert.resolutionMode = mode;
+  }
+
+  function alertStillPending(alert) {
+    const product = alert.relatedProductId ? findProduct(alert.relatedProductId) : null;
+    const treatment = alert.relatedTreatmentId ? findTreatment(alert.relatedTreatmentId) : null;
+    if (treatment) return treatmentHasTechnicalPending(treatment);
+    if (product) return productHasTechnicalPending(product);
+    return false;
+  }
+
+  function labelAlertType(type) {
+    const labels = {
+      A_VERIFY: 'A verificar',
+      INCIDENT: 'Incidencia',
+      MAX_REACHED: 'Máximo alcanzado',
+      MAX_FORCED: 'Máximo forzado',
+      DOC_REVIEW: 'Revisión documental'
+    };
+    return labels[type] || type || 'Alerta';
+  }
+
+  function buildAlert(type, title, description, relatedProductId, relatedTreatmentId) {
+    return {
+      id: `a_${cryptoRandom()}`,
+      campaignId: state.activeCampaignId,
+      type,
+      status: 'ACTIVE',
+      title,
+      description,
+      relatedProductId: relatedProductId || null,
+      relatedTreatmentId: relatedTreatmentId || null,
+      createdAt: new Date().toISOString(),
+      resolvedAt: null
+    };
+  }
+
+  async function showProductModal(id) {
+    const product = findProduct(id);
+    if (!product) return;
+    ensureProductDocumentShape(product);
+    const body = `
+      <div class="kv-grid">
+        <div class="kv"><strong>Registro</strong><span>${escapeHtml(product.registration || '—')}</span></div>
+        <div class="kv"><strong>Estado</strong><span>${escapeHtml(product.verificationStatus || '—')}</span></div>
+        <div class="kv"><strong>Dosis</strong><span>${escapeHtml(product.doseReference || '—')}</span></div>
+        <div class="kv"><strong>Regla dosis</strong><span>${escapeHtml(product.doseRule?.mode || 'pending')}</span></div>
+        <div class="kv"><strong>Volumen caldo</strong><span>${escapeHtml(product.volumeReference || '—')}</span></div>
+        <div class="kv"><strong>Regla volumen</strong><span>${escapeHtml(product.volumeRule?.mode || 'pending')}</span></div>
+        <div class="kv"><strong>P.S.</strong><span>${escapeHtml(product.safetyPeriod || '—')}</span></div>
+        <div class="kv"><strong>Máx. campaña</strong><span>${escapeHtml(String(product.maxApplications ?? 'NO CONSTA'))}</span></div>
+        <div class="kv"><strong>Principios activos</strong><span>${escapeHtml(product.activeIngredients || '—')}</span></div>
+        <div class="kv"><strong>MEZCLA</strong><span>${escapeHtml(product.mixRule || '----')}</span></div>
+        <div class="kv"><strong>Usos autorizados</strong><span>${escapeHtml(renderInlineList(product.allowedUses, '—'))}</span></div>
+        <div class="kv"><strong>Objetivos</strong><span>${escapeHtml(renderInlineList(product.allowedObjectives, '—'))}</span></div>
+        <div class="kv"><strong>Intervalo</strong><span>${escapeHtml(product.applicationInterval || '—')}</span></div>
+        <div class="kv"><strong>Estadio / condiciones</strong><span>${escapeHtml(product.applicationStage || '—')}</span></div>
+        <div class="kv"><strong>Fuente</strong>${renderProductSource(product)}</div>
+      </div>
+      ${renderProductDocumentsSection(product)}
+    `;
+    const decision = await choiceDialog(product.name, body, [
+      { id: 'edit', label: 'Editar / completar ficha', className: 'secondary-btn' },
+      { id: 'close', label: 'Cerrar', className: 'primary-btn' }
+    ], true);
+    if (decision === 'edit') {
+      els.modalHost.innerHTML = '';
+      return showProductEditChoice(id);
+    }
+    els.modalHost.innerHTML = '';
+  }
+
+  async function showProductEditChoice(id) {
+    const product = findProduct(id);
+    if (!product) return;
+    const decision = await choiceDialog(`Completar ficha: ${product.name}`, `
+      <p>Selecciona el método de trabajo.</p>
+      <div class="notice" style="margin-top:12px">
+        <strong>A) Completar manualmente.</strong>
+        <p>Abre el formulario técnico completo para escribir o corregir cada campo.</p>
+      </div>
+      <div class="notice" style="margin-top:12px">
+        <strong>B) Completar desde documentación.</strong>
+        <p>Permite aportar fotos de envase, etiqueta o PDF. La app guardará la documentación en la ficha, intentará extraer datos con evidencia suficiente y mantendrá como <strong>A verificar</strong> lo dudoso o incompleto.</p>
+      </div>
+    `, [
+      { id: 'manual', label: 'A) Completar manualmente', className: 'secondary-btn' },
+      { id: 'documents', label: 'B) Completar desde documentación', className: 'primary-btn' },
+      { id: 'cancel', label: 'Cancelar', className: 'ghost-btn' }
+    ]);
+    if (decision === 'manual') return showEditProductModal(id);
+    if (decision === 'documents') return showProductDocumentIntakeModal(id);
+  }
+
+  async function showProductDocumentIntakeModal(id) {
+    const product = findProduct(id);
+    if (!product) return;
+    const body = `
+      <div class="notice">
+        <strong>Documentación técnica asociada.</strong>
+        <p>Se admiten imágenes y PDF. Las imágenes se optimizan localmente para mantener un formato legible y ligero. Los documentos quedarán guardados en la ficha del producto y en la copia completa JSON.</p>
+      </div>
+      <div class="notice extraction-guidance" style="margin-top:12px">
+        <strong>Flujo recomendado para mejorar la lectura.</strong>
+        <p>1) Foto de identificación/composición. 2) Foto nítida de la tabla de usos, dosis, volumen y P.S. 3) PDF o ficha técnica si existe. La app cruza la información y presenta una propuesta revisable antes de aplicar cambios.</p>
+      </div>
+      <div class="field"><span>Tipo de documentación principal</span><select id="productDocumentRole">${renderSimpleOptions([
+        ['mixed', 'Conjunto mixto: envase + tabla + PDF'],
+        ['identity', 'Identificación / composición'],
+        ['use_table', 'Tabla de usos, dosis, volumen y P.S.'],
+        ['technical_pdf', 'Ficha técnica / registro / PDF'],
+        ['other', 'Otro documento']
+      ], 'mixed')}</select></div>
+      <div class="field"><span>Fotos / PDF</span><input id="productDocumentFiles" type="file" accept=".pdf,application/pdf,image/*" multiple></div>
+      <div class="field"><span>Nota de fuente opcional</span><textarea id="productDocumentNote" placeholder="Ej.: etiqueta envase 2026, ficha técnica fabricante, registro oficial..."></textarea></div>
+      <p class="muted">La app ya no vuelca texto OCR bruto en la ficha. Primero genera una <strong>propuesta de extracción por campos</strong>; solo se aplicará tras revisión.</p>
+    `;
+    const decision = await choiceDialog(`Aportar documentación: ${product.name}`, body, [
+      { id: 'analyze', label: 'Guardar y analizar', className: 'primary-btn' },
+      { id: 'cancel', label: 'Cancelar', className: 'ghost-btn' }
+    ], true);
+    if (decision !== 'analyze') { els.modalHost.innerHTML = ''; return; }
+    const files = Array.from(document.getElementById('productDocumentFiles')?.files || []);
+    const note = document.getElementById('productDocumentNote')?.value?.trim() || '';
+    const role = document.getElementById('productDocumentRole')?.value || 'mixed';
+    els.modalHost.innerHTML = '';
+    if (!files.length) {
+      toast('Selecciona al menos una imagen o PDF.');
+      return showProductDocumentIntakeModal(id);
+    }
+    return processProductDocuments(product, files, note, role);
+  }
+
+  async function showEditProductModal(id) {
+    const product = findProduct(id);
+    if (!product) return;
+    ensureProductDocumentShape(product);
+    const doseRule = product.doseRule || { mode: 'pending' };
+    const volumeRule = product.volumeRule || { mode: 'pending' };
+    const body = `
+      <div id="editProductFeedback" class="warning-block hidden"></div>
+      <div class="notice">
+        <strong>Edición manual.</strong>
+        <p>Los documentos técnicos asociados a esta ficha: <strong>${(product.documents || []).length}</strong>. Puedes cerrar y volver a elegir la vía documental si prefieres completar desde fotos o PDF.</p>
+      </div>
+      <div class="field"><span>Producto</span><input id="editProductNameReadonly" value="${escapeAttr(product.name || '')}" readonly></div>
+      <div class="inline-fields two">
+        <div class="field"><span>N.º de registro</span><input id="editProductRegistration" value="${escapeAttr(product.registration || '')}" placeholder="Registro o SIN REGISTRO"></div>
+        <div class="field"><span>Estado técnico</span><select id="editProductVerificationStatus">${renderSimpleOptions([
+          ['PENDING', 'A verificar'],
+          ['VERIFIED', 'Verificado']
+        ], product.verificationStatus || 'PENDING')}</select></div>
+      </div>
+      <div class="field"><span>Dosis recomendada</span><textarea id="editProductDoseReference" placeholder="Texto visible en cuaderno">${escapeHtml(product.doseReference || '')}</textarea></div>
+      <div class="field"><span>Tipo de regla de dosis para validación</span><select id="editProductDoseMode">${renderSimpleOptions([
+        ['pending', 'A verificar'],
+        ['fixed', 'Dosis única por ha'],
+        ['concentration_range_with_ha_limit', 'Rango % + límite por ha'],
+        ['concentration_hl_range_with_ha_limit', 'Rango g/hL o cc/hL + límite por ha'],
+        ['concentration_fixed_with_ha_limit', 'Concentración % única + límite por ha'],
+        ['concentration_hl_range', 'Rango g/hL o cc/hL sin límite por ha']
+      ], doseRule.mode || 'pending')}</select></div>
+      <div class="inline-fields two">
+        <div class="field"><span>Unidad visible dosis</span><input id="editDoseDisplayUnit" value="${escapeAttr(doseRule.displayUnit || '')}" placeholder="kg/ha, %, g/hL, cc/hL..."></div>
+        <div class="field"><span>Unidad esperada aplicada</span><input id="editDoseExpectedAppliedUnit" value="${escapeAttr(doseRule.expectedAppliedUnit || '')}" placeholder="kg/ha, cc/ha, g/hL..."></div>
+      </div>
+      <div class="inline-fields two">
+        <div class="field"><span>Valor único dosis</span><input id="editDoseValue" value="${escapeAttr(ruleInputValue(doseRule.value))}" inputmode="decimal" placeholder="Solo modos de valor único"></div>
+        <div class="field"><span>Mínimo dosis</span><input id="editDoseMin" value="${escapeAttr(ruleInputValue(doseRule.min))}" inputmode="decimal" placeholder="Solo modos con rango"></div>
+      </div>
+      <div class="inline-fields two">
+        <div class="field"><span>Máximo dosis</span><input id="editDoseMax" value="${escapeAttr(ruleInputValue(doseRule.max))}" inputmode="decimal" placeholder="Solo modos con rango"></div>
+        <div class="field"><span>Límite por ha</span><input id="editDosePerHaLimit" value="${escapeAttr(ruleInputValue(doseRule.perHaLimit))}" inputmode="decimal" placeholder="Si la etiqueta lo fija"></div>
+      </div>
+      <div class="field"><span>Unidad límite por ha</span><input id="editDosePerHaLimitUnit" value="${escapeAttr(doseRule.perHaLimitUnit || '')}" placeholder="kg/ha o L/ha"></div>
+      <hr class="separator">
+      <div class="field"><span>Volumen caldo</span><textarea id="editProductVolumeReference" placeholder="Texto visible en cuaderno">${escapeHtml(product.volumeReference || '')}</textarea></div>
+      <div class="field"><span>Tipo de volumen caldo</span><select id="editProductVolumeMode">${renderSimpleOptions([
+        ['pending', 'A verificar'],
+        ['fixed', 'Volumen único'],
+        ['range', 'Volumen mínimo y máximo'],
+        ['not_listed', 'NO CONSTA en la fuente']
+      ], volumeRule.mode || 'pending')}</select></div>
+      <p class="muted compact-note">Unidad fija para volumen: <strong>L/ha</strong>.</p>
+      <div id="editVolumeFixedPanel" class="${volumeRule.mode === 'fixed' ? '' : 'hidden'}">
+        <div class="field"><span>Volumen único</span><input id="editVolumeValue" value="${escapeAttr(ruleInputValue(volumeRule.value))}" inputmode="decimal" placeholder="L/ha"></div>
+      </div>
+      <div id="editVolumeRangePanel" class="${volumeRule.mode === 'range' ? '' : 'hidden'}">
+        <div class="inline-fields two">
+          <div class="field"><span>Volumen mínimo</span><input id="editVolumeMin" value="${escapeAttr(ruleInputValue(volumeRule.min))}" inputmode="decimal" placeholder="L/ha"></div>
+          <div class="field"><span>Volumen máximo</span><input id="editVolumeMax" value="${escapeAttr(ruleInputValue(volumeRule.max))}" inputmode="decimal" placeholder="L/ha"></div>
+        </div>
+      </div>
+      <div class="inline-fields two">
+        <div class="field"><span>Cultivo / usos autorizados</span><textarea id="editProductAllowedUses" placeholder="Uno por línea">${escapeHtml((product.allowedUses || []).join('\n'))}</textarea></div>
+        <div class="field"><span>Plagas / objetivos autorizados</span><textarea id="editProductAllowedObjectives" placeholder="Uno por línea">${escapeHtml((product.allowedObjectives || []).join('\n'))}</textarea></div>
+      </div>
+      <div class="inline-fields two">
+        <div class="field"><span>Intervalo entre aplicaciones</span><input id="editProductApplicationInterval" value="${escapeAttr(product.applicationInterval || '')}" placeholder="Ej.: 7-10 días"></div>
+        <div class="field"><span>Estadio / condiciones de aplicación</span><textarea id="editProductApplicationStage" placeholder="Ej.: BBCH 13/14-85">${escapeHtml(product.applicationStage || '')}</textarea></div>
+      </div>
+      <div class="inline-fields two">
+        <div class="field"><span>P.S.</span><input id="editProductSafetyPeriod" value="${escapeAttr(product.safetyPeriod || '')}" placeholder="28 días o NO PROCEDE"></div>
+        <div class="field"><span>Máx. aplicaciones campaña</span><input id="editProductMaxApplications" value="${escapeAttr(maxApplicationsInput(product.maxApplications))}" inputmode="numeric" placeholder="Número o NO CONSTA"></div>
+      </div>
+      <div class="field"><span>Principios activos</span><textarea id="editProductActiveIngredients" placeholder="Principios activos">${escapeHtml(product.activeIngredients || '')}</textarea></div>
+      <div class="inline-fields two">
+        <div class="field"><span>MEZCLA</span><select id="editProductMixRule">${renderSimpleOptions([
+          ['A verificar', 'A verificar'],
+          ['----', 'Sin obligación de SOLO'],
+          ['SOLO', 'SOLO']
+        ], product.mixRule || 'A verificar')}</select></div>
+        <div class="field"><span>Fecha de verificación</span><input id="editProductVerifiedAt" type="date" value="${escapeAttr(verifiedDateInput(product.verifiedAt))}"></div>
+      </div>
+      <div class="field"><span>Fuente / referencia documental</span><textarea id="editProductSource" placeholder="Etiqueta, registro oficial, ficha técnica...">${escapeHtml(cleanProductSourceBase(product.source || ''))}</textarea></div>
+      <p class="muted">Al guardar una ficha verificada, la app actualizará automáticamente en el cuaderno solo los campos técnicos que estén “A verificar” y resolverá las alertas técnicas que ya no procedan.</p>
+    `;
+    const decision = await choiceDialog(`Editar ficha: ${product.name}`, body, [
+      { id: 'save', label: 'Guardar ficha', className: 'primary-btn' },
+      { id: 'cancel', label: 'Cancelar', className: 'ghost-btn' }
+    ], true);
+    if (decision !== 'save') { els.modalHost.innerHTML = ''; return; }
+
+    const payload = readProductEditPayload(product);
+    const validationErrors = validateProductEditPayload(payload);
+    if (validationErrors.length) {
+      showProductEditFeedback(validationErrors);
+      return;
+    }
+    els.modalHost.innerHTML = '';
+    applyProductEditPayload(product, payload);
+    const updatedRows = propagateProductVerificationToTreatments(product);
+    const resolvedAlerts = reconcileAlertsForProduct(product);
+    await saveState();
+    toast(`Ficha guardada. ${updatedRows} registro(s) del cuaderno actualizado(s). ${resolvedAlerts} alerta(s) resuelta(s).`);
+    render();
+  }
+
+  function readProductEditPayload(product) {
+    const read = id => document.getElementById(id)?.value?.trim() ?? '';
+    const verificationStatus = read('editProductVerificationStatus') || product.verificationStatus || 'PENDING';
+    const doseMode = read('editProductDoseMode') || 'pending';
+    const volumeMode = read('editProductVolumeMode') || 'pending';
+    return {
+      registration: read('editProductRegistration'),
+      verificationStatus,
+      doseReference: read('editProductDoseReference'),
+      doseRule: buildDoseRuleFromEdit({
+        mode: doseMode,
+        displayUnit: read('editDoseDisplayUnit'),
+        expectedAppliedUnit: read('editDoseExpectedAppliedUnit'),
+        value: readNumericEdit('editDoseValue'),
+        min: readNumericEdit('editDoseMin'),
+        max: readNumericEdit('editDoseMax'),
+        perHaLimit: readNumericEdit('editDosePerHaLimit'),
+        perHaLimitUnit: read('editDosePerHaLimitUnit')
+      }),
+      volumeReference: read('editProductVolumeReference'),
+      volumeRule: buildVolumeRuleFromEdit({
+        mode: volumeMode,
+        value: readNumericEdit('editVolumeValue'),
+        min: readNumericEdit('editVolumeMin'),
+        max: readNumericEdit('editVolumeMax')
+      }),
+      allowedUses: parseLinesInput(read('editProductAllowedUses')),
+      allowedObjectives: parseLinesInput(read('editProductAllowedObjectives')),
+      applicationInterval: read('editProductApplicationInterval'),
+      applicationStage: read('editProductApplicationStage'),
+      safetyPeriod: read('editProductSafetyPeriod'),
+      maxApplications: parseMaxApplicationsEdit(read('editProductMaxApplications')),
+      activeIngredients: read('editProductActiveIngredients'),
+      mixRule: read('editProductMixRule') || 'A verificar',
+      verifiedAt: read('editProductVerifiedAt'),
+      source: read('editProductSource')
+    };
+  }
+
+  function buildDoseRuleFromEdit(input) {
+    const base = {
+      mode: input.mode || 'pending',
+      displayUnit: input.displayUnit || '',
+      expectedAppliedUnit: input.expectedAppliedUnit || ''
+    };
+    if (base.mode === 'pending') return { mode: 'pending' };
+    if (base.mode === 'fixed') return { ...base, value: input.value };
+    if (base.mode === 'concentration_range_with_ha_limit' || base.mode === 'concentration_hl_range_with_ha_limit') {
+      return { ...base, min: input.min, max: input.max, perHaLimit: input.perHaLimit, perHaLimitUnit: input.perHaLimitUnit || '' };
+    }
+    if (base.mode === 'concentration_fixed_with_ha_limit') {
+      return { ...base, value: input.value, perHaLimit: input.perHaLimit, perHaLimitUnit: input.perHaLimitUnit || '' };
+    }
+    if (base.mode === 'concentration_hl_range') return { ...base, min: input.min, max: input.max };
+    return { mode: 'pending' };
+  }
+
+  function buildVolumeRuleFromEdit(input) {
+    if (input.mode === 'not_listed') return { mode: 'not_listed' };
+    if (input.mode === 'fixed') return { mode: 'fixed', unit: 'L/ha', value: input.value };
+    if (input.mode === 'range') return { mode: 'range', unit: 'L/ha', min: input.min, max: input.max };
+    return { mode: 'pending' };
+  }
+
+  function validateProductEditPayload(payload) {
+    const errors = [];
+    if (!payload.registration) errors.push('Indica el número de registro o SIN REGISTRO.');
+    if (!payload.doseReference) errors.push('Completa la dosis recomendada visible en cuaderno.');
+    if (!payload.volumeReference) errors.push('Completa el volumen de caldo o escribe NO CONSTA.');
+    if (!payload.safetyPeriod) errors.push('Completa el P.S. o escribe NO PROCEDE.');
+    if (!payload.activeIngredients) errors.push('Completa los principios activos.');
+    if (!payload.mixRule) errors.push('Selecciona la regla MEZCLA.');
+    if (!payload.source) errors.push('Indica una fuente o referencia documental.');
+    if (payload.maxApplications === 'INVALID') errors.push('Máx. aplicaciones debe ser un número o NO CONSTA.');
+
+    if (payload.verificationStatus === 'VERIFIED') {
+      if (containsPending(payload.registration)) errors.push('No se puede verificar con registro A verificar.');
+      if (containsPending(payload.doseReference)) errors.push('No se puede verificar con dosis recomendada A verificar.');
+      if (containsPending(payload.volumeReference)) errors.push('No se puede verificar con volumen caldo A verificar.');
+      if (containsPending(payload.safetyPeriod)) errors.push('No se puede verificar con P.S. A verificar.');
+      if (containsPending(payload.activeIngredients)) errors.push('No se puede verificar con principios activos A verificar.');
+      if (containsPending(payload.mixRule)) errors.push('No se puede verificar con MEZCLA A verificar.');
+      if (payload.doseRule.mode === 'pending') errors.push('Selecciona una regla de validación de dosis antes de verificar.');
+      if (payload.volumeRule.mode === 'pending') errors.push('Selecciona una regla de volumen o marca NO CONSTA antes de verificar.');
+      errors.push(...validateDoseRulePayload(payload.doseRule));
+      errors.push(...validateVolumeRulePayload(payload.volumeRule));
+    }
+    return errors;
+  }
+
+  function validateDoseRulePayload(rule) {
+    const errors = [];
+    const hasNumber = value => Number.isFinite(value);
+    if (rule.mode === 'pending') return errors;
+    if (!rule.displayUnit) errors.push('Indica la unidad visible de la regla de dosis.');
+    if (!rule.expectedAppliedUnit) errors.push('Indica la unidad esperada para la dosis aplicada.');
+    if (rule.mode === 'fixed' && !hasNumber(rule.value)) errors.push('La dosis única necesita un valor numérico.');
+    if ((rule.mode === 'concentration_range_with_ha_limit' || rule.mode === 'concentration_hl_range_with_ha_limit' || rule.mode === 'concentration_hl_range') && (!hasNumber(rule.min) || !hasNumber(rule.max))) {
+      errors.push('La regla de rango necesita mínimo y máximo numéricos.');
+    }
+    if (rule.mode === 'concentration_fixed_with_ha_limit' && !hasNumber(rule.value)) errors.push('La concentración única necesita un valor numérico.');
+    if ((rule.mode === 'concentration_range_with_ha_limit' || rule.mode === 'concentration_hl_range_with_ha_limit' || rule.mode === 'concentration_fixed_with_ha_limit') && (!hasNumber(rule.perHaLimit) || !rule.perHaLimitUnit)) {
+      errors.push('La regla con límite por ha necesita valor y unidad del límite.');
+    }
+    if (hasNumber(rule.min) && hasNumber(rule.max) && rule.min > rule.max) errors.push('El mínimo de dosis no puede superar al máximo.');
+    return errors;
+  }
+
+  function validateVolumeRulePayload(rule) {
+    const errors = [];
+    if (rule.mode === 'fixed' && !Number.isFinite(rule.value)) {
+      errors.push('El volumen único necesita un valor numérico.');
+    }
+    if (rule.mode === 'range') {
+      if (!Number.isFinite(rule.min) || !Number.isFinite(rule.max)) errors.push('El rango de volumen necesita mínimo y máximo numéricos.');
+      if (Number.isFinite(rule.min) && Number.isFinite(rule.max) && rule.min > rule.max) errors.push('El mínimo de volumen no puede superar al máximo.');
+    }
+    return errors;
+  }
+
+  function showProductEditFeedback(errors) {
+    const box = document.getElementById('editProductFeedback');
+    if (!box) return toast(errors[0] || 'Revisa la ficha.');
+    box.innerHTML = `<strong>No se puede guardar todavía.</strong><ul class="list-clean" style="margin-top:8px">${errors.map(error => `<li>${escapeHtml(error)}</li>`).join('')}</ul>`;
+    box.classList.remove('hidden');
+    box.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  function applyProductEditPayload(product, payload) {
+    product.registration = payload.registration;
+    product.verificationStatus = payload.verificationStatus;
+    product.doseReference = payload.doseReference;
+    product.doseRule = payload.doseRule;
+    product.volumeReference = payload.volumeReference;
+    product.volumeRule = payload.volumeRule;
+    product.allowedUses = payload.allowedUses;
+    product.allowedObjectives = payload.allowedObjectives;
+    product.applicationInterval = payload.applicationInterval;
+    product.applicationStage = payload.applicationStage;
+    product.safetyPeriod = payload.safetyPeriod;
+    product.maxApplications = payload.maxApplications;
+    product.activeIngredients = payload.activeIngredients;
+    product.mixRule = payload.mixRule;
+    product.verifiedAt = payload.verificationStatus === 'VERIFIED' ? (payload.verifiedAt || todayLocalIso()) : (payload.verifiedAt || null);
+    product.source = payload.source;
+    product.updatedAt = new Date().toISOString();
+  }
+
+  function propagateProductVerificationToTreatments(product) {
+    let updated = 0;
+    state.treatments.forEach(row => {
+      if (row.productId !== product.id) return;
+      let changed = false;
+      changed = applyIfTechnicalPending(row, 'registration', product.registration) || changed;
+      changed = applyIfTechnicalPending(row, 'doseReference', product.doseReference) || changed;
+      changed = applyIfTechnicalPending(row, 'volumeReference', product.volumeReference) || changed;
+      changed = applyIfTechnicalPending(row, 'safetyPeriod', product.safetyPeriod) || changed;
+      changed = applyIfTechnicalPending(row, 'activeIngredients', product.activeIngredients) || changed;
+      changed = applyIfTechnicalPending(row, 'mixRule', product.mixRule) || changed;
+      if (row.verificationStatus === 'PENDING' && product.verificationStatus === 'VERIFIED') {
+        row.verificationStatus = 'VERIFIED';
+        changed = true;
+      }
+      row.snapshot ||= buildSnapshot(product);
+      changed = applySnapshotIfTechnicalPending(row.snapshot, 'registration', product.registration) || changed;
+      changed = applySnapshotIfTechnicalPending(row.snapshot, 'doseReference', product.doseReference) || changed;
+      changed = applySnapshotIfTechnicalPending(row.snapshot, 'volumeReference', product.volumeReference) || changed;
+      changed = applySnapshotIfTechnicalPending(row.snapshot, 'safetyPeriod', product.safetyPeriod) || changed;
+      changed = applySnapshotIfTechnicalPending(row.snapshot, 'activeIngredients', product.activeIngredients) || changed;
+      changed = applySnapshotIfTechnicalPending(row.snapshot, 'mixRule', product.mixRule) || changed;
+      if ((row.snapshot.verificationStatus === 'PENDING' || containsPending(row.snapshot.verificationStatus)) && product.verificationStatus === 'VERIFIED') {
+        row.snapshot.verificationStatus = 'VERIFIED';
+        changed = true;
+      }
+      if ((row.snapshot.registration === product.registration || !containsPending(row.snapshot.registration)) && product.verificationStatus === 'VERIFIED') {
+        if (containsPending(row.snapshot?.doseRule?.mode) || row.snapshot?.doseRule?.mode === 'pending') {
+          row.snapshot.doseRule = deepClone(product.doseRule);
+          changed = true;
+        }
+        if (containsPending(row.snapshot?.volumeRule?.mode) || row.snapshot?.volumeRule?.mode === 'pending') {
+          row.snapshot.volumeRule = deepClone(product.volumeRule);
+          changed = true;
+        }
+        if (row.snapshot.maxApplications === null || row.snapshot.maxApplications === undefined || containsPending(row.snapshot.maxApplications)) {
+          row.snapshot.maxApplications = product.maxApplications;
+          changed = true;
+        }
+      }
+      if (product.verificationStatus === 'VERIFIED') {
+        const technicalValidation = validateEntryAgainstProduct(product, row.doseApplied, row.litersPerHa);
+        if (!technicalValidation.ok) {
+          const validationMessage = `Validación tras verificar ficha: ${technicalValidation.messages.join(' | ')}`;
+          const mergedIncidence = mergeUniqueIncidence(row.incidence, validationMessage);
+          if (mergedIncidence !== row.incidence) {
+            row.incidence = mergedIncidence;
+            changed = true;
+          }
+          ensureIncidentAlertForTreatment(row, product, validationMessage);
+        }
+      }
+      const cleanedIncidence = removeResolvedTechnicalPendingIncidence(row.incidence, row);
+      if (cleanedIncidence !== row.incidence) {
+        row.incidence = cleanedIncidence;
+        changed = true;
+      }
+      if (changed) {
+        row.updatedAt = new Date().toISOString();
+        updated += 1;
       }
     });
-    return out.filter(a=>searchMatch(a.title,a.detail));
+    return updated;
   }
 
-  function openDb(){ return new Promise((res,rej)=>{ const r=indexedDB.open(DOC_DB,1); r.onupgradeneeded=()=>{ const db=r.result; if(!db.objectStoreNames.contains(DOC_STORE)) db.createObjectStore(DOC_STORE); }; r.onsuccess=()=>res(r.result); r.onerror=()=>rej(r.error); }); }
-  async function putDoc(id, blob){ const db=await openDb(); return new Promise((res,rej)=>{ const tx=db.transaction(DOC_STORE,'readwrite'); tx.objectStore(DOC_STORE).put(blob,id); tx.oncomplete=()=>{db.close();res();}; tx.onerror=()=>{db.close();rej(tx.error);}; }); }
-  async function getDoc(id){ const db=await openDb(); return new Promise((res,rej)=>{ const tx=db.transaction(DOC_STORE,'readonly'); const r=tx.objectStore(DOC_STORE).get(id); r.onsuccess=()=>{db.close();res(r.result||null);}; r.onerror=()=>{db.close();rej(r.error);}; }); }
-  async function delDoc(id){ const db=await openDb(); return new Promise((res,rej)=>{ const tx=db.transaction(DOC_STORE,'readwrite'); tx.objectStore(DOC_STORE).delete(id); tx.oncomplete=()=>{db.close();res();}; tx.onerror=()=>{db.close();rej(tx.error);}; }); }
+  function applyIfTechnicalPending(target, key, newValue) {
+    if (!target || !containsPending(target[key])) return false;
+    target[key] = newValue;
+    return true;
+  }
 
-  function renderAll(){ syncView(); renderInicio(); renderNuevo(); renderCuaderno(); renderAlertas(); renderMas(); }
-  function syncView(){ refs.nav.forEach(b=>b.classList.toggle('active',b.dataset.nav===ui.view)); Object.entries(refs.views).forEach(([k,v])=>v.classList.toggle('active',k===ui.view)); }
-  function setView(v){ ui.view=v; renderAll(); window.scrollTo({top:0,behavior:'smooth'}); }
-  function linkViews(root){ $$('[data-open-view]',root).forEach(b=>b.addEventListener('click',()=>setView(b.dataset.openView))); }
+  function applySnapshotIfTechnicalPending(snapshot, key, newValue) {
+    if (!snapshot || !containsPending(snapshot[key])) return false;
+    snapshot[key] = newValue;
+    return true;
+  }
 
-  function renderInicio(){
-    const last=[...state.interventions].sort((a,b)=>b.date.localeCompare(a.date))[0];
-    const alerts=alertList();
-    refs.views.inicio.innerHTML=`
-      <div class="stack">
-        <section class="summary-grid">
-          <article class="summary-tile"><span>Fechas registradas</span><strong>${state.interventions.length}</strong></article>
-          <article class="summary-tile"><span>Aplicaciones</span><strong>${apps().length}</strong></article>
-          <article class="summary-tile"><span>Productos verificados</span><strong>${state.products.filter(p=>p.status==='verified'&&!p.archived).length}</strong></article>
-          <article class="summary-tile"><span>Alertas activas</span><strong>${alerts.length}</strong></article>
+  function removeResolvedTechnicalPendingIncidence(incidence, row) {
+    const text = String(incidence || '').trim();
+    if (!text) return '';
+    if (treatmentHasTechnicalPending(row)) return text;
+    const parts = text.split('|').map(part => part.trim()).filter(Boolean);
+    const filtered = parts.filter(part => !/pendiente t[eé]cnico|datos a verificar|campos pendientes t[eé]cnicos/i.test(part));
+    return filtered.join(' | ');
+  }
+
+  function mergeUniqueIncidence(existing, addition) {
+    const parts = String(existing || '').split('|').map(part => part.trim()).filter(Boolean);
+    if (addition && !parts.includes(addition)) parts.push(addition);
+    return parts.join(' | ');
+  }
+
+  function ensureIncidentAlertForTreatment(row, product, description) {
+    const alreadyActive = state.alerts.some(alert => alert.status === 'ACTIVE' && alert.type === 'INCIDENT' && alert.relatedTreatmentId === row.id && alert.description === description);
+    if (alreadyActive) return;
+    state.alerts.push(buildAlert('INCIDENT', `Incidencia tras verificar ficha: ${row.productName}`, description, product.id, row.id));
+  }
+
+  function productHasTechnicalPending(product) {
+    if (!product || product.verificationStatus !== 'VERIFIED') return true;
+    if (containsPending(product.registration) || containsPending(product.doseReference) || containsPending(product.volumeReference) || containsPending(product.safetyPeriod) || containsPending(product.activeIngredients) || containsPending(product.mixRule)) return true;
+    if (!product.doseRule || product.doseRule.mode === 'pending') return true;
+    if (!product.volumeRule || product.volumeRule.mode === 'pending') return true;
+    return false;
+  }
+
+  function treatmentHasTechnicalPending(row) {
+    if (!row || row.verificationStatus === 'PENDING') return true;
+    return containsPending(row.registration) || containsPending(row.doseReference) || containsPending(row.volumeReference) || containsPending(row.safetyPeriod) || containsPending(row.activeIngredients) || containsPending(row.mixRule);
+  }
+
+  function reconcileAlertsForProduct(product) {
+    let resolved = 0;
+    state.alerts.forEach(alert => {
+      if (alert.status !== 'ACTIVE' || alert.type !== 'A_VERIFY' || alert.relatedProductId !== product.id) return;
+      const treatment = alert.relatedTreatmentId ? findTreatment(alert.relatedTreatmentId) : null;
+      const canResolve = treatment ? !treatmentHasTechnicalPending(treatment) : !productHasTechnicalPending(product);
+      if (!canResolve) return;
+      markAlertResolved(alert, 'AUTO_PRODUCT_VERIFICATION');
+      resolved += 1;
+    });
+    return resolved;
+  }
+
+  function ensureProductDocumentShape(product) {
+    if (!product || typeof product !== 'object') return;
+    product.documents ||= [];
+    if (!Array.isArray(product.documents)) product.documents = [];
+    product.allowedUses ||= [];
+    if (!Array.isArray(product.allowedUses)) product.allowedUses = product.allowedUses ? [String(product.allowedUses)] : [];
+    product.allowedObjectives ||= [];
+    if (!Array.isArray(product.allowedObjectives)) product.allowedObjectives = product.allowedObjectives ? [String(product.allowedObjectives)] : [];
+    product.applicationInterval ||= '';
+    product.applicationStage ||= '';
+  }
+
+  function renderProductDocumentsSection(product) {
+    ensureProductDocumentShape(product);
+    const docs = product.documents || [];
+    return `
+      <section class="document-section">
+        <div class="section-header compact-header">
+          <div>
+            <h3>Documentación técnica asociada</h3>
+            <p>${docs.length ? `${docs.length} documento(s) guardado(s) como respaldo de la ficha.` : 'Sin documentación técnica adjunta.'}</p>
+          </div>
+        </div>
+        ${docs.length ? `<div class="document-list">${docs.map(doc => renderProductDocumentRow(product, doc)).join('')}</div>` : ''}
+        <div class="button-row" style="margin-top:12px">
+          <button type="button" class="secondary-btn" data-modal-action="add-product-docs" data-product-id="${escapeAttr(product.id)}">Aportar documentación</button>
+        </div>
+      </section>
+    `;
+  }
+
+  function renderProductDocumentRow(product, doc) {
+    const typeLabel = doc.mimeType === 'application/pdf' ? 'PDF' : 'Imagen';
+    return `
+      <article class="document-row">
+        <div>
+          <strong>${escapeHtml(doc.name || 'Documento técnico')}</strong>
+          <p class="muted">${typeLabel} · ${escapeHtml(formatBytes(doc.sizeStored || doc.sizeOriginal || 0))}${doc.optimized ? ' · optimizado' : ''}</p>
+        </div>
+        <div class="mini-actions">
+          <button type="button" class="ghost-btn compact" data-modal-action="view-product-doc" data-product-id="${escapeAttr(product.id)}" data-doc-id="${escapeAttr(doc.id)}">Ver</button>
+          <button type="button" class="danger-btn compact" data-modal-action="delete-product-doc" data-product-id="${escapeAttr(product.id)}" data-doc-id="${escapeAttr(doc.id)}">Eliminar</button>
+        </div>
+      </article>
+    `;
+  }
+
+  async function showProductDocumentViewer(productId, docId) {
+    const product = findProduct(productId);
+    ensureProductDocumentShape(product);
+    const doc = product?.documents?.find(item => item.id === docId);
+    if (!doc) return toast('No se encontró el documento.');
+    const body = doc.mimeType === 'application/pdf'
+      ? `<div class="doc-preview"><iframe class="doc-frame" src="${escapeAttr(doc.dataUrl)}" title="${escapeAttr(doc.name || 'PDF técnico')}"></iframe></div><p class="muted">Si el visor del iPhone no lo muestra, abre el PDF desde el enlace inferior.</p><p><a class="secondary-link" href="${escapeAttr(doc.dataUrl)}" target="_blank" rel="noopener">Abrir documento aparte</a></p>`
+      : `<div class="doc-preview image"><img src="${escapeAttr(doc.dataUrl)}" alt="${escapeAttr(doc.name || 'Documento técnico')}"></div><p><button type="button" class="secondary-btn" data-modal-action="zoom-product-doc-image" data-product-id="${escapeAttr(product.id)}" data-doc-id="${escapeAttr(doc.id)}">Ver imagen ampliada</button></p><p class="muted">La ampliación se abre dentro de la app para evitar pantallas en blanco en iPhone.</p>`;
+    await choiceDialog(doc.name || 'Documento técnico', body, [
+      { id: 'close', label: 'Cerrar', className: 'primary-btn' }
+    ]);
+  }
+
+  async function showProductImageZoomViewer(productId, docId) {
+    const product = findProduct(productId);
+    ensureProductDocumentShape(product);
+    const doc = product?.documents?.find(item => item.id === docId);
+    if (!doc) return toast('No se encontró la imagen.');
+    if (doc.mimeType === 'application/pdf') return showProductDocumentViewer(productId, docId);
+    const body = `
+      <div class="doc-preview image image-zoom-preview">
+        <img src="${escapeAttr(doc.dataUrl)}" alt="${escapeAttr(doc.name || 'Documento técnico ampliado')}">
+      </div>
+      <p class="muted">Vista ampliada dentro de la app. Puedes hacer zoom propio del iPhone sobre la pantalla si necesitas inspeccionar el texto.</p>
+    `;
+    const decision = await choiceDialog(`${doc.name || 'Documento técnico'} · ampliada`, body, [
+      { id: 'back', label: 'Volver', className: 'primary-btn' }
+    ]);
+    if (decision === 'back') return showProductDocumentViewer(productId, docId);
+  }
+
+  async function deleteProductDocument(productId, docId) {
+    const product = findProduct(productId);
+    ensureProductDocumentShape(product);
+    const doc = product?.documents?.find(item => item.id === docId);
+    if (!doc) return;
+    const ok = await confirmDialog('Eliminar documento', `¿Eliminar <strong>${escapeHtml(doc.name || 'este documento')}</strong> de la ficha?`, 'Eliminar', 'Cancelar');
+    if (!ok) return showProductModal(productId);
+    product.documents = product.documents.filter(item => item.id !== docId);
+    product.source = cleanProductSourceBase(product.source);
+    product.updatedAt = new Date().toISOString();
+    await saveState();
+    toast('Documento eliminado de la ficha.');
+    return showProductModal(productId);
+  }
+
+  function showBusyModal(title, text) {
+    els.modalHost.innerHTML = `
+      <div class="modal-backdrop" role="dialog" aria-modal="true">
+        <section class="modal-card">
+          <h2>${escapeHtml(title)}</h2>
+          <div class="modal-body">
+            <div class="notice"><strong id="busyModalText">${escapeHtml(text)}</strong></div>
+            <p class="muted" id="busyModalDetail">La operación se realiza localmente en el dispositivo.</p>
+          </div>
         </section>
-        <section class="card">
-          <div class="section-heading"><div><h2>Resumen de campaña</h2><p class="muted">App neutra: sin tratamientos reales incrustados.</p></div></div>
-          <div class="info-grid"><div class="soft-box"><span class="meta">Última fecha</span><strong>${last?fmtDate(last.date):'Sin registros'}</strong></div><div class="soft-box"><span class="meta">Borradores</span><strong>${state.drafts.length}</strong></div></div>
-          <div class="action-row top-gap"><button class="primary-button" data-open-view="nuevo" type="button">Nuevo tratamiento</button><button class="secondary-button" data-open-view="cuaderno" type="button">Ver cuaderno</button></div>
+      </div>
+    `;
+  }
+
+  function updateBusyModal(text, detail = '') {
+    const main = document.getElementById('busyModalText');
+    const sub = document.getElementById('busyModalDetail');
+    if (main) main.textContent = text || '';
+    if (sub && detail) sub.textContent = detail;
+  }
+
+  async function processProductDocuments(product, files, note, role = 'mixed') {
+    ensureProductDocumentShape(product);
+    showBusyModal('Analizando documentación', 'Preparando documentos…');
+    const docs = [];
+    const extractedTexts = [];
+    const warnings = [];
+    let ocrWorker = null;
+    const getOcrWorker = async () => {
+      if (ocrWorker) return ocrWorker;
+      updateBusyModal('Cargando OCR…', 'La primera vez puede tardar porque se prepara el motor de lectura.');
+      const Tesseract = await loadTesseractLibrary();
+      ocrWorker = await Tesseract.createWorker('spa+eng', 1, {
+        logger: message => {
+          if (message?.status) updateBusyModal('Leyendo texto…', `${message.status}${Number.isFinite(message.progress) ? ` · ${Math.round(message.progress * 100)}%` : ''}`);
+        }
+      });
+      return ocrWorker;
+    };
+    try {
+      for (let index = 0; index < files.length; index += 1) {
+        const file = files[index];
+        updateBusyModal(`Guardando documento ${index + 1}/${files.length}…`, file.name || 'Documento técnico');
+        const stored = await normalizeProductDocumentFile(file);
+        const doc = {
+          id: `doc_${cryptoRandom()}`,
+          name: file.name || `documento_${index + 1}`,
+          mimeType: stored.mimeType,
+          role,
+          sizeOriginal: file.size || 0,
+          sizeStored: stored.sizeStored,
+          optimized: stored.optimized,
+          dataUrl: stored.dataUrl,
+          createdAt: new Date().toISOString(),
+          extractedAt: null,
+          extractionSummary: '',
+          sourceNote: note || ''
+        };
+        docs.push(doc);
+        updateBusyModal(`Extrayendo texto ${index + 1}/${files.length}…`, doc.name);
+        try {
+          const text = await extractTextFromProductDocument(file, stored, getOcrWorker);
+          if (text && text.trim()) {
+            extractedTexts.push(`DOCUMENTO: ${doc.name}
+${text}`);
+            doc.extractedAt = new Date().toISOString();
+            doc.extractionSummary = trimText(text, 800);
+          } else {
+            warnings.push(`${doc.name}: no se detectó texto útil.`);
+          }
+        } catch (error) {
+          console.error(error);
+          warnings.push(`${doc.name}: no se pudo extraer texto automáticamente.`);
+        }
+      }
+    } finally {
+      if (ocrWorker) {
+        try { await ocrWorker.terminate(); } catch (error) { console.warn(error); }
+      }
+    }
+
+    product.documents.push(...docs);
+    product.source = cleanProductSourceBase(product.source);
+    product.updatedAt = new Date().toISOString();
+    await saveState();
+
+    const combinedText = extractedTexts.join('\n\n');
+    const suggestions = buildProductSuggestionsFromDocumentText(product, combinedText);
+    els.modalHost.innerHTML = '';
+    return showDocumentExtractionReview(product, docs, suggestions, warnings);
+  }
+
+  async function showDocumentExtractionReview(product, docs, suggestions, warnings) {
+    const entries = suggestionEntries(suggestions);
+    const confident = entries.filter(entry => entry.confidence === 'alta').length;
+    const moderate = entries.filter(entry => entry.confidence === 'media').length;
+    const body = `
+      <div class="notice">
+        <strong>Documentación guardada: ${docs.length}</strong>
+        <p>Se ha asociado a la ficha de ${escapeHtml(product.name)}. Revisa <strong>campo por campo</strong>: puedes aceptar la propuesta automática o sustituirla por tu dato manual dentro del mismo recuadro.</p>
+      </div>
+      <div class="notice extraction-guidance" style="margin-top:12px">
+        <strong>Lectura estructurada.</strong>
+        <p>Propuestas con confianza alta: <strong>${confident}</strong>. Propuestas con confianza media o revisión: <strong>${moderate}</strong>. Todo lo que no marques o no completes seguirá como <strong>A verificar</strong>.</p>
+      </div>
+      <section class="document-review-cards">
+        ${DOCUMENT_REVIEW_FIELDS.map(field => renderDocumentReviewFieldCard(product, suggestions, field)).join('')}
+      </section>
+      ${warnings.length ? `<div class="warning-block" style="margin-top:12px"><strong>Avisos de extracción</strong><ul class="list-clean" style="margin-top:8px">${warnings.map(item => `<li>${escapeHtml(item)}</li>`).join('')}</ul></div>` : ''}
+    `;
+    const decision = await choiceDialog('Revisión documental campo por campo', body, [
+      { id: 'apply', label: 'Aplicar campos marcados', className: 'primary-btn' },
+      { id: 'manual', label: 'Abrir edición manual completa', className: 'secondary-btn' },
+      { id: 'close', label: 'Cerrar sin aplicar', className: 'ghost-btn' }
+    ], true);
+    if (decision === 'manual') return showEditProductModal(product.id);
+    if (decision !== 'apply') { els.modalHost.innerHTML = ''; return render(); }
+    const reviewPayload = collectDocumentReviewPayload(product, suggestions);
+    if (!reviewPayload.selectedKeys.length) {
+      toast('No hay campos marcados para aplicar.');
+      return showDocumentExtractionReview(product, docs, suggestions, warnings);
+    }
+    const validationErrors = validateDocumentReviewPayload(reviewPayload);
+    if (validationErrors.length) {
+      toast(validationErrors[0]);
+      return showDocumentExtractionReview(product, docs, suggestions, warnings);
+    }
+    const applied = applyDocumentReviewValuesToProduct(product, reviewPayload.values, reviewPayload.selectedKeys);
+    const updatedRows = propagateProductVerificationToTreatments(product);
+    const resolvedAlerts = reconcileAlertsForProduct(product);
+    product.updatedAt = new Date().toISOString();
+    await saveState();
+    els.modalHost.innerHTML = '';
+    return showDocumentExtractionSummary(product, docs, applied, pendingLabelsForProduct(product), warnings, updatedRows, resolvedAlerts);
+  }
+
+  async function showDocumentExtractionSummary(product, docs, applied, pendingLabels, warnings, updatedRows, resolvedAlerts) {
+    const body = `
+      <div class="notice">
+        <strong>Documentación guardada: ${docs.length}</strong>
+        <p>Se ha asociado a la ficha de ${escapeHtml(product.name)}.</p>
+      </div>
+      <div class="subgrid" style="margin-top:12px">
+        <section class="subcard compact-subcard">
+          <h3>Datos aplicados tras revisión</h3>
+          ${applied.length ? `<p>${applied.map(escapeHtml).join(' · ')}</p>` : '<p class="muted">No se aplicó ningún campo.</p>'}
         </section>
-        ${renderDraftPreview()}
-        ${renderAlertsPreview(alerts)}
-      </div>`;
-    linkViews(refs.views.inicio);
-    bindAlertCards(refs.views.inicio);
-    $$('[data-resume-draft]',refs.views.inicio).forEach(b=>b.addEventListener('click',()=>{ui.activeDraftId=b.dataset.resumeDraft; setView('nuevo');}));
-    $$('[data-discard-draft]',refs.views.inicio).forEach(b=>b.addEventListener('click',()=>discardDraft(b.dataset.discardDraft)));
-  }
-  function renderDraftPreview(){
-    if(!state.drafts.length) return `<section class="card"><h2>Continuidad</h2><p class="muted">No hay borradores pendientes.</p></section>`;
-    return `<section class="card"><div class="section-heading"><div><h2>Continuidad con borradores</h2><p class="muted">Retoma entradas autoguardadas.</p></div></div><div class="stack">${state.drafts.slice(0,2).map(d=>`<article class="draft-card"><div class="section-heading"><div><h3>${esc(d.title)}</h3><p class="muted">${d.groups.length} fecha(s) · ${draftAppCount(d)} producto(s)</p></div>${badge('Borrador','info')}</div><div class="action-row"><button class="primary-button" data-resume-draft="${d.id}" type="button">Retomar</button><button class="danger-outline-button" data-discard-draft="${d.id}" type="button">Descartar</button></div></article>`).join('')}</div></section>`;
-  }
-  function renderAlertsPreview(alerts){
-    if(!alerts.length) return `<section class="card"><h2>Alertas</h2><p class="muted">No hay alertas activas.</p></section>`;
-    return `<section class="card"><div class="section-heading"><div><h2>Alertas prioritarias</h2><p class="muted">Las alertas técnicas no se resuelven si la causa persiste.</p></div><button class="text-button" data-open-view="alertas" type="button">Ver todas</button></div><div class="stack">${alerts.slice(0,3).map(renderAlertCard).join('')}</div></section>`;
-  }
-
-  function renderNuevo(){
-    const d=draft();
-    refs.views.nuevo.innerHTML=`<div class="stack"><section class="card"><div class="section-heading"><div><h2>Nuevo tratamiento</h2><p class="muted">Proceso guiado, secuencial y con autoguardado silencioso.</p></div>${d?badge('Borrador activo','info'):badge('Entrada nueva','success')}</div>${d?renderDraftEditor(d):renderDraftStart()}</section>${renderDraftList()}</div>`;
-    bindNuevo();
-  }
-  function renderDraftStart(){ return `<form id="startDraft" class="stack"><div class="form-grid"><label class="field"><span>Fecha con calendario</span><input class="field-input" name="calendar" type="date" value="${todayIso()}" /></label><label class="field"><span>O escritura manual dd/mm/aaaa</span><input class="field-input" name="manual" type="text" placeholder="${fmtDate(todayIso())}" inputmode="numeric" /></label></div><p class="helper">La fecha futura queda bloqueada inicialmente y exige doble verificación.</p><div class="action-row"><button class="primary-button" type="submit">Comenzar registro</button></div></form>`; }
-  function renderDraftEditor(d){
-    const g=d.groups.find(x=>x.id===d.currentGroupId)||d.groups[d.groups.length-1];
-    if(!g) return renderDraftStart();
-    return `<div class="stack"><div class="soft-box"><span class="meta">Fecha activa</span><strong>${fmtDate(g.date)}</strong><p class="muted">Productos en esta fecha: ${g.applications.length}</p></div>${renderDraftApps(g)}${renderAppForm(g)}<div class="action-row divided-actions"><button class="secondary-button" data-add-date type="button">Añadir otra fecha</button><button class="primary-button" data-finalize-draft type="button">Finalizar y registrar</button></div><div class="action-row"><button class="text-button" data-save-draft type="button">Cerrar y dejar en borradores</button><button class="danger-outline-button" data-discard-draft="${d.id}" type="button">Descartar borrador</button></div></div>`;
-  }
-  function renderDraftApps(g){
-    if(!g.applications.length) return `<div class="empty-state">Aún no hay productos añadidos para ${fmtDate(g.date)}.</div>`;
-    return `<div class="stack compact-stack">${g.applications.map(a=>{const p=product(a.productId); const issues=validate(a,{group:g,date:g.date,futureConfirmed:g.futureConfirmed}); return `<article class="record-card"><div class="section-heading"><div><h3>${esc(p?.name||a.productNameSnapshot||'Producto')}</h3><p class="muted">Lote ${esc(a.lot||'—')} · ${esc(a.crop||'—')} · ${esc(a.target||'—')}</p></div>${statusBadge(p)}</div><div class="metric-grid"><div class="mini-metric"><span>Dosis</span><strong>${esc(a.doseApplied||'—')} ${esc(a.doseUnit||'')}</strong></div><div class="mini-metric"><span>L/ha</span><strong>${esc(a.lha||'—')}</strong></div></div>${issues.length?`<div class="warning-box">${issues.map(i=>`<p>${esc(i.text)}</p>`).join('')}</div>`:''}<div class="action-row"><button class="text-button" data-remove-draft-app="${a.id}" type="button">Quitar</button></div></article>`;}).join('')}</div>`;
-  }
-  function renderAppForm(g){
-    const productOptions=[...new Map([...recentProducts(),...state.products.filter(p=>!p.archived)].map(p=>[p.id,p])).values()];
-    return `<form id="draftAppForm" class="panel nested-panel stack"><div class="section-heading"><div><h3>Añadir producto a ${fmtDate(g.date)}</h3><p class="muted">Productos recientes primero; también admite alta provisional.</p></div></div><label class="field"><span>Producto</span><input class="field-input" id="draftProductName" name="productName" list="prodlist" placeholder="Buscar o escribir nombre comercial" autocomplete="off" required /><datalist id="prodlist">${productOptions.map(p=>`<option value="${esc(p.name)}"></option>`).join('')}</datalist></label><div id="selectedProductStatus" class="helper">Al seleccionar un producto se muestran sus opciones técnicas.</div><div class="form-grid"><label class="field"><span>Lote</span><input class="field-input" name="lot" required /></label><label class="field"><span>Cultivo / uso</span><select class="field-select" id="draftCrop" name="crop"><option value="${esc(state.settings.defaultCrop)}">${esc(state.settings.defaultCrop)}</option></select></label></div><div class="form-grid"><label class="field"><span>Plaga / objetivo</span><select class="field-select" id="draftTarget" name="target"><option value="">Selecciona producto</option></select></label><label class="field"><span>Dosis aplicada</span><input class="field-input" name="doseApplied" type="number" step="0.001" min="0" required /></label></div><div class="form-grid"><label class="field"><span>Unidad dosis</span><select class="field-select" id="draftDoseUnit" name="doseUnit"><option value="">Selecciona producto</option>${units.map(u=>`<option value="${u}">${u}</option>`).join('')}</select></label><label class="field"><span>Litros/ha aplicados</span><input class="field-input" name="lha" type="number" step="0.001" min="0" value="${esc(state.settings.defaultLha)}" required /></label></div><label class="field"><span>Observaciones opcionales</span><textarea class="field-textarea" name="observations"></textarea></label><label class="field"><span>Incidencia opcional</span><textarea class="field-textarea" name="incidence"></textarea></label><div id="technicalHint" class="info-box">Selecciona un producto para ver dosis, volumen, P.S. y máximo de campaña.</div><div id="appValidation"></div><div class="action-row"><button class="primary-button" type="submit">Añadir producto</button></div></form>`;
-  }
-  function renderDraftList(){
-    if(!state.drafts.length) return '';
-    return `<section class="card"><div class="section-heading"><div><h2>Borradores guardados</h2><p class="muted">Múltiples borradores disponibles.</p></div></div><div class="stack">${state.drafts.map(d=>`<article class="draft-card ${d.id===ui.activeDraftId?'selected-card':''}"><div class="section-heading"><div><h3>${esc(d.title)}</h3><p class="muted">${d.groups.length} fecha(s) · ${draftAppCount(d)} aplicación(es)</p></div>${d.id===ui.activeDraftId?badge('Activo','success'):badge('Guardado','info')}</div><div class="action-row"><button class="secondary-button" data-resume-draft="${d.id}" type="button">Retomar</button><button class="danger-outline-button" data-discard-draft="${d.id}" type="button">Descartar</button></div></article>`).join('')}</div></section>`;
-  }
-  function draftAppCount(d){ return d.groups.reduce((s,g)=>s+g.applications.length,0); }
-  function recentProducts(){ const ids=[]; [...apps()].reverse().forEach(x=>{if(x.app.productId&&!ids.includes(x.app.productId)) ids.push(x.app.productId);}); return ids.map(product).filter(Boolean); }
-
-  function bindNuevo(){
-    $('#startDraft',refs.views.nuevo)?.addEventListener('submit',e=>{e.preventDefault(); const f=new FormData(e.currentTarget); const iso=parseManualDate(f.get('manual')) || String(f.get('calendar')||''); if(!dateObj(iso)) return toast('La fecha no es válida.','danger'); const done=()=>createDraft(iso,isFuture(iso)); isFuture(iso)?futureDoubleConfirm(iso,done):done();});
-    $('#draftProductName',refs.views.nuevo)?.addEventListener('input',assistProduct);
-    $('#draftProductName',refs.views.nuevo)?.addEventListener('change',assistProduct);
-    $('#draftCrop',refs.views.nuevo)?.addEventListener('change',updateTargetOptions);
-    $('#draftAppForm',refs.views.nuevo)?.addEventListener('submit',e=>{e.preventDefault(); addDraftApp(e.currentTarget);});
-    $$('[data-remove-draft-app]',refs.views.nuevo).forEach(b=>b.addEventListener('click',()=>removeDraftApp(b.dataset.removeDraftApp)));
-    $('[data-add-date]',refs.views.nuevo)?.addEventListener('click',addAnotherDate);
-    $('[data-finalize-draft]',refs.views.nuevo)?.addEventListener('click',finalizeDraft);
-    $('[data-save-draft]',refs.views.nuevo)?.addEventListener('click',()=>{ui.activeDraftId=null; save(); renderAll(); toast('Borrador guardado.');});
-    $$('[data-resume-draft]',refs.views.nuevo).forEach(b=>b.addEventListener('click',()=>{ui.activeDraftId=b.dataset.resumeDraft; renderAll();}));
-    $$('[data-discard-draft]',refs.views.nuevo).forEach(b=>b.addEventListener('click',()=>discardDraft(b.dataset.discardDraft)));
-    assistProduct();
-  }
-  function createDraft(iso,futureConfirmed){ const d={id:uid('draft'),title:`Borrador ${fmtDate(iso)}`,groups:[{id:uid('grupo'),date:iso,futureConfirmed,applications:[]}],currentGroupId:'',createdAt:nowIso(),updatedAt:nowIso()}; d.currentGroupId=d.groups[0].id; mutate(s=>{s.drafts.unshift(d); ui.activeDraftId=d.id;},'Registro iniciado.'); }
-  function assistProduct(){ const input=$('#draftProductName',refs.views.nuevo), status=$('#selectedProductStatus',refs.views.nuevo), crop=$('#draftCrop',refs.views.nuevo), target=$('#draftTarget',refs.views.nuevo), unit=$('#draftDoseUnit',refs.views.nuevo), hint=$('#technicalHint',refs.views.nuevo); if(!input||!status||!crop||!target||!unit||!hint) return; const p=byName(input.value); if(!p){ status.innerHTML=`${badge('Alta provisional','warning')} Se creará ficha A verificar al añadir.`; crop.innerHTML=`<option value="${esc(state.settings.defaultCrop)}">${esc(state.settings.defaultCrop)}</option>`; target.innerHTML='<option value="">Escribe el objetivo tras crear la ficha</option>'; hint.textContent='Producto provisional: validación técnica completa pendiente.'; return; } status.innerHTML=`${statusBadge(p)} ${esc(p.registration)}`; const crops=[...new Set(p.uses.map(u=>u.crop).filter(Boolean))]; crop.innerHTML=(crops.length?crops:[state.settings.defaultCrop]).map(c=>`<option value="${esc(c)}">${esc(c)}</option>`).join(''); updateTargetOptions(); const u=p.uses[0]; if(u?.doseRule?.unit) unit.value=u.doseRule.unit; hint.innerHTML=techHint(u); }
-  function updateTargetOptions(){ const p=byName($('#draftProductName',refs.views.nuevo)?.value); const crop=$('#draftCrop',refs.views.nuevo), target=$('#draftTarget',refs.views.nuevo), unit=$('#draftDoseUnit',refs.views.nuevo), hint=$('#technicalHint',refs.views.nuevo); if(!p||!crop||!target) return; const uses=p.uses.filter(u=>norm(u.crop)===norm(crop.value)); const list=uses.length?uses:p.uses; target.innerHTML=list.map(u=>`<option value="${esc(u.target||'')}">${esc(u.target||'A verificar')}</option>`).join(''); const u=list[0]||p.uses[0]; if(unit&&u?.doseRule?.unit) unit.value=u.doseRule.unit; if(hint) hint.innerHTML=techHint(u); }
-  function techHint(u){ return !u?'Ficha técnica no disponible.':`<strong>Dosis:</strong> ${esc(u.doseDisplay)} · <strong>Volumen:</strong> ${esc(u.volumeDisplay)} · <strong>P.S.:</strong> ${esc(u.ps)} · <strong>Máx. campaña:</strong> ${esc(u.maxApplications??'A verificar')}`; }
-  function addDraftApp(form){ const d=draft(); const g=d?.groups.find(x=>x.id===d.currentGroupId); if(!d||!g) return; const fd=new FormData(form); const name=String(fd.get('productName')||'').trim(); if(!name) return toast('Indica un producto.','danger'); let p=byName(name); if(!p) p=normalizeProduct({id:uid('prod'),name,uses:[blankUse()]}); const a=normalizeApp({productId:p.id,productNameSnapshot:p.name,lot:fd.get('lot'),crop:fd.get('crop'),target:fd.get('target'),doseApplied:fd.get('doseApplied'),doseUnit:fd.get('doseUnit'),lha:fd.get('lha'),observations:fd.get('observations'),incidence:fd.get('incidence')}); const issues=validate(a,{group:g,date:g.date,futureConfirmed:g.futureConfirmed}); const bad=blockers(issues); if(bad.length){ $('#appValidation',refs.views.nuevo).innerHTML=`<div class="danger-box">${bad.map(i=>`<p>${esc(i.text)}</p>`).join('')}</div>`; return toast('No se puede añadir: corrige los datos marcados.','danger'); } mutate(s=>{if(!product(p.id)) s.products.push(p); const dd=s.drafts.find(x=>x.id===d.id); const gg=dd.groups.find(x=>x.id===g.id); gg.applications.push(a); dd.updatedAt=nowIso();},issues.length?'Producto añadido con avisos pendientes.':'Producto añadido.'); }
-  function removeDraftApp(id){ const d=draft(); if(!d) return; mutate(s=>{const dd=s.drafts.find(x=>x.id===d.id); dd.groups.forEach(g=>g.applications=g.applications.filter(a=>a.id!==id)); dd.updatedAt=nowIso();},'Producto retirado del borrador.'); }
-  function addAnotherDate(){ const d=draft(); if(!d) return; modal(`<div class="modal-head"><h2>Añadir otra fecha</h2><button class="icon-button" data-close-modal type="button">×</button></div><form id="addDateForm" class="stack"><label class="field"><span>Fecha con calendario</span><input class="field-input" name="calendar" type="date" value="${todayIso()}" /></label><label class="field"><span>O escritura manual dd/mm/aaaa</span><input class="field-input" name="manual" type="text" placeholder="${fmtDate(todayIso())}" /></label><div class="action-row"><button class="secondary-button" data-close-modal type="button">Cancelar</button><button class="primary-button" type="submit">Añadir fecha</button></div></form>`); $('#addDateForm',refs.modal)?.addEventListener('submit',e=>{e.preventDefault(); const fd=new FormData(e.currentTarget); const iso=parseManualDate(fd.get('manual'))||String(fd.get('calendar')||''); if(!dateObj(iso)) return toast('La fecha no es válida.','danger'); const done=()=>{closeModal(); mutate(s=>{const dd=s.drafts.find(x=>x.id===d.id); const existing=dd.groups.find(g=>g.date===iso); if(existing) dd.currentGroupId=existing.id; else {const g={id:uid('grupo'),date:iso,futureConfirmed:isFuture(iso),applications:[]}; dd.groups.push(g); dd.currentGroupId=g.id;} dd.updatedAt=nowIso();},'Fecha añadida al borrador.');}; isFuture(iso)?(closeModal(),futureDoubleConfirm(iso,done)):done(); }); }
-  function discardDraft(id){ confirmBox('Descartar borrador','Esta acción elimina el borrador. Requiere confirmación expresa.',()=>confirmBox('Segunda confirmación','Confirma que deseas borrar definitivamente este borrador.',()=>mutate(s=>{s.drafts=s.drafts.filter(d=>d.id!==id); if(ui.activeDraftId===id) ui.activeDraftId=null;},'Borrador descartado.'),'Descartar definitivamente',true),'Continuar',true); }
-  function finalizeDraft(){ const d=draft(); if(!d||!draftAppCount(d)) return toast('No hay aplicaciones para registrar.','danger'); const bad=[]; d.groups.forEach(g=>g.applications.forEach(a=>blockers(validate(a,{group:g,date:g.date,futureConfirmed:g.futureConfirmed})).forEach(i=>bad.push(`${fmtDate(g.date)} · ${i.text}`)))); if(bad.length) return confirmBox('Registro bloqueado',bad.slice(0,5).join(' | '),()=>{},'Entendido',true); const solo=d.groups.filter(g=>g.applications.length>1 && g.applications.some(a=>product(a.productId)?.mix==='SOLO')); if(solo.length) return confirmBox('Producto marcado SOLO',`En ${solo.map(g=>fmtDate(g.date)).join(', ')} hay un producto SOLO junto con otros. Confirma que se aplicaron en cubas distintas.`,()=>commitDraft(d),'Confirmar cubas distintas',true); commitDraft(d); }
-  function commitDraft(d){ mutate(s=>{d.groups.forEach(g=>{let i=s.interventions.find(x=>x.date===g.date); if(!i){i=normalizeIntervention({date:g.date}); s.interventions.push(i);} g.applications.forEach(a=>{if(!i.applications.some(x=>x.productId===a.productId)) i.applications.push(normalizeApp(a));}); i.updatedAt=nowIso();}); s.interventions.sort((a,b)=>a.date.localeCompare(b.date)); s.drafts=s.drafts.filter(x=>x.id!==d.id); ui.activeDraftId=null;},'Tratamientos registrados en el cuaderno.'); setView('cuaderno'); }
-
-  const headers=['N.º','Fecha','Nombre del producto','N.º de registro','Lote','Dosis recomendada','Dosis aplicada','Volumen caldo','Litros/ha aplicados','Cultivo','Plaga / patógeno','P.S.','Tratamientos campaña','Principios activos','MEZCLA'];
-  function officialRows(list=state.interventions){ const nums=interventionNumbers(); const rows=[]; [...list].sort((a,b)=>a.date.localeCompare(b.date)).forEach(i=>i.applications.forEach(a=>{const p=product(a.productId), u=productUse(p,a); rows.push([nums.get(i.id),fmtDate(i.date),p?.name||a.productNameSnapshot||'—',p?.registration||'A verificar',a.lot||'—',u?.doseDisplay||'A verificar',`${a.doseApplied||'—'} ${a.doseUnit||''}`.trim(),u?.volumeDisplay||'A verificar',`${a.lha||'—'} L/ha`,a.crop||'—',a.target||'—',u?.ps||'A verificar',u?.maxApplications??'A verificar',p?.activeIngredients||'A verificar',p?.mix||'A verificar']);})); return rows; }
-  function filteredInterventions(){ return state.interventions.map(i=>({...i,applications:i.applications.filter(a=>searchMatch(i.date,fmtDate(i.date),product(a.productId)?.name,a.productNameSnapshot,a.lot,a.crop,a.target,a.observations,a.incidence))})).filter(i=>i.applications.length).sort((a,b)=>a.date.localeCompare(b.date)); }
-  function renderCuaderno(){
-    const list=filteredInterventions();
-    refs.views.cuaderno.innerHTML=`<div class="stack"><section class="card"><div class="section-heading"><div><h2>Cuaderno</h2><p class="muted">N.º agrupado por fecha/intervención; orden cronológico automático.</p></div></div><div class="segmented-control"><button data-mode="cards" class="${ui.cuadernoMode==='cards'?'active':''}" type="button">Trabajo</button><button data-mode="table" class="${ui.cuadernoMode==='table'?'active':''}" type="button">15 columnas</button><button data-mode="pdf" class="${ui.cuadernoMode==='pdf'?'active':''}" type="button">Vista PDF</button></div><div class="action-row top-gap"><button class="secondary-button" data-export="csv" type="button">CSV</button><button class="secondary-button" data-export="excel" type="button">Excel</button><button class="secondary-button" data-export="pdf-official" type="button">PDF oficial</button><button class="secondary-button" data-export="pdf-compact" type="button">PDF compacto</button></div></section>${list.length?renderCuadernoMode(list):'<section class="card empty-state">No hay registros que mostrar.</section>'}</div>`;
-    $$('[data-mode]',refs.views.cuaderno).forEach(b=>b.addEventListener('click',()=>{ui.cuadernoMode=b.dataset.mode; renderCuaderno();}));
-    $$('[data-export]',refs.views.cuaderno).forEach(b=>b.addEventListener('click',()=>exportNotebook(b.dataset.export)));
-    $$('[data-edit-intervention]',refs.views.cuaderno).forEach(b=>b.addEventListener('click',()=>openInterventionEditor(b.dataset.editIntervention)));
-  }
-  function renderCuadernoMode(list){ return ui.cuadernoMode==='table'?renderTable(list):ui.cuadernoMode==='pdf'?renderPdfPreview(list):renderCards(list); }
-  function renderCards(list){ const nums=interventionNumbers(); return list.map(i=>`<section class="card"><div class="section-heading"><div><h2>N.º ${nums.get(i.id)} · ${fmtDate(i.date)}</h2><p class="muted">${i.applications.length} aplicación(es)</p></div><button class="text-button" data-edit-intervention="${i.id}" type="button">Editar</button></div><div class="stack">${i.applications.map(a=>renderSavedApp(i,a)).join('')}</div></section>`).join(''); }
-  function renderSavedApp(i,a){ const p=product(a.productId), u=productUse(p,a), issues=validate(a,{date:i.date,futureConfirmed:true}); return `<article class="record-card ${issues.length?'has-alert':''}"><div class="section-heading"><div><h3>${esc(p?.name||a.productNameSnapshot||'Producto')}</h3><p class="muted">Lote ${esc(a.lot||'—')} · ${esc(a.crop||'—')} · ${esc(a.target||'—')}</p></div>${statusBadge(p)}</div><div class="info-grid"><div class="mini-metric"><span>Dosis recomendada</span><strong>${esc(u?.doseDisplay||'A verificar')}</strong></div><div class="mini-metric"><span>Dosis aplicada</span><strong>${esc(a.doseApplied||'—')} ${esc(a.doseUnit||'')}</strong></div><div class="mini-metric"><span>Volumen caldo</span><strong>${esc(u?.volumeDisplay||'A verificar')}</strong></div><div class="mini-metric"><span>L/ha aplicados</span><strong>${esc(a.lha||'—')}</strong></div></div><div class="meta-row top-gap">${badge(`P.S.: ${u?.ps||'A verificar'}`,u?.ps&&u.ps!=='A verificar'?'info':'warning')}${badge(`MEZCLA: ${p?.mix||'A verificar'}`,p?.mix==='SOLO'?'danger':'neutral')}</div>${a.incidence?`<div class="danger-box top-gap"><strong>Incidencia:</strong> ${esc(a.incidence)}</div>`:''}${issues.length?`<div class="warning-box top-gap">${issues.map(x=>`<p>${esc(x.text)}</p>`).join('')}</div>`:''}${a.observations?`<p class="small-note top-gap"><strong>Observaciones:</strong> ${esc(a.observations)}</p>`:''}</article>`; }
-  function renderTable(list){ const rows=officialRows(list); return `<section class="card"><div class="table-scroll"><table class="official-table"><thead><tr>${headers.map(h=>`<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows.map(r=>`<tr>${r.map(c=>`<td>${esc(c)}</td>`).join('')}</tr>`).join('')}</tbody></table></div></section>`; }
-  function renderPdfPreview(list){ const rows=officialRows(list); return `<section class="document-card pdf-preview"><div class="pdf-sheet"><h2>Cuaderno de tratamientos · Campaña 2026</h2><p>Vista previa documental completa de 15 columnas.</p><div class="table-scroll"><table class="official-table pdf-table"><thead><tr>${headers.map(h=>`<th>${esc(h)}</th>`).join('')}</tr></thead><tbody>${rows.map(r=>`<tr>${r.map(c=>`<td>${esc(c)}</td>`).join('')}</tr>`).join('')}</tbody></table></div></div></section>`; }
-  function openInterventionEditor(id){ const i=state.interventions.find(x=>x.id===id); if(!i) return; modal(`<div class="modal-head"><h2>Editar intervención ${fmtDate(i.date)}</h2><button class="icon-button" data-close-modal type="button">×</button></div><div class="stack">${i.applications.map(a=>{const p=product(a.productId); return `<form class="panel nested-panel stack edit-saved-app" data-app="${a.id}"><h3>${esc(p?.name||a.productNameSnapshot||'Producto')}</h3><div class="form-grid"><label class="field"><span>Lote</span><input class="field-input" name="lot" value="${esc(a.lot)}" required /></label><label class="field"><span>Litros/ha</span><input class="field-input" name="lha" type="number" step="0.001" value="${esc(a.lha)}" required /></label></div><div class="form-grid"><label class="field"><span>Dosis aplicada</span><input class="field-input" name="doseApplied" type="number" step="0.001" value="${esc(a.doseApplied)}" required /></label><label class="field"><span>Unidad</span><select class="field-select" name="doseUnit">${units.map(u=>`<option value="${u}" ${u===a.doseUnit?'selected':''}>${u}</option>`).join('')}</select></label></div><label class="field"><span>Observaciones</span><textarea class="field-textarea" name="observations">${esc(a.observations)}</textarea></label><label class="field"><span>Incidencia</span><textarea class="field-textarea" name="incidence">${esc(a.incidence)}</textarea></label><div class="action-row"><button class="primary-button" type="submit">Guardar cambios</button><button class="danger-outline-button" data-delete-saved-app="${a.id}" type="button">Eliminar</button></div></form>`;}).join('')}</div>`,'wide-modal'); $$('.edit-saved-app',refs.modal).forEach(f=>f.addEventListener('submit',e=>{e.preventDefault(); updateSavedApp(id,f.dataset.app,new FormData(f));})); $$('[data-delete-saved-app]',refs.modal).forEach(b=>b.addEventListener('click',()=>confirmBox('Eliminar aplicación','Se retirará esta aplicación del cuaderno.',()=>{closeModal(); mutate(s=>{const ii=s.interventions.find(x=>x.id===id); ii.applications=ii.applications.filter(a=>a.id!==b.dataset.deleteSavedApp); if(!ii.applications.length) s.interventions=s.interventions.filter(x=>x.id!==id);},'Aplicación eliminada.');},'Eliminar',true))); }
-  function updateSavedApp(interventionId,appId,fd){ const i=state.interventions.find(x=>x.id===interventionId), old=i?.applications.find(a=>a.id===appId); if(!i||!old) return; const candidate=normalizeApp({...old,lot:fd.get('lot'),lha:fd.get('lha'),doseApplied:fd.get('doseApplied'),doseUnit:fd.get('doseUnit'),observations:fd.get('observations'),incidence:fd.get('incidence'),updatedAt:nowIso()}); const bad=blockers(validate(candidate,{date:i.date,futureConfirmed:true})); if(bad.length) return toast(bad[0].text,'danger'); mutate(s=>{const ii=s.interventions.find(x=>x.id===interventionId); const n=ii.applications.findIndex(a=>a.id===appId); ii.applications[n]=candidate; ii.updatedAt=nowIso();},'Cambios guardados.'); closeModal(); }
-
-  function exportNotebook(type){ const rows=officialRows(); if(!rows.length) return toast('No hay datos para exportar.','danger'); if(type==='csv'){ const csv=[headers,...rows].map(r=>r.map(csvCell).join(';')).join('\n'); return download(new Blob(['\ufeff'+csv],{type:'text/csv;charset=utf-8'}),'cuaderno_tratamientos_v2_0.csv'); } if(type==='excel'){ const x=excelXml(headers,rows); return download(new Blob([x],{type:'application/vnd.ms-excel'}),'cuaderno_tratamientos_v2_0.xls'); } const compact=type==='pdf-compact'; const pdf=simplePdf(compact?'Cuaderno de tratamientos · compacto':'Cuaderno de tratamientos · oficial',pdfLines(rows,compact)); return download(new Blob([pdf],{type:'application/pdf'}),compact?'cuaderno_tratamientos_compacto_v2_0.pdf':'cuaderno_tratamientos_oficial_v2_0.pdf'); }
-  function csvCell(v){ return `"${String(v??'').replaceAll('"','""')}"`; }
-  function xml(v){ return String(v??'').replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&apos;'); }
-  function excelXml(h,r){ const cell=v=>`<Cell><Data ss:Type="String">${xml(v)}</Data></Cell>`; return `<?xml version="1.0" encoding="UTF-8"?><?mso-application progid="Excel.Sheet"?><Workbook xmlns="urn:schemas-microsoft-com:office:spreadsheet" xmlns:ss="urn:schemas-microsoft-com:office:spreadsheet"><Worksheet ss:Name="Cuaderno V2.0"><Table><Row>${h.map(cell).join('')}</Row>${r.map(row=>`<Row>${row.map(cell).join('')}</Row>`).join('')}</Table></Worksheet></Workbook>`; }
-  function pdfLines(rows,compact){ if(compact) return rows.map(r=>`${r[1]} | ${r[2]} | Lote ${r[4]} | ${r[6]} | ${r[8]} | ${r[10]}`); const out=[]; rows.forEach(r=>{out.push(`N.º ${r[0]} · ${r[1]} · ${r[2]}`); out.push(`Registro: ${r[3]} | Lote: ${r[4]} | Cultivo: ${r[9]} | Objetivo: ${r[10]}`); out.push(`Dosis recomendada: ${r[5]} | Aplicada: ${r[6]} | Volumen: ${r[7]} | L/ha: ${r[8]}`); out.push(`P.S.: ${r[11]} | Tratamientos campaña: ${r[12]} | Principios: ${r[13]} | Mezcla: ${r[14]}`); out.push(' ');}); return out; }
-  function simplePdf(title,lines){ const safe=t=>String(t??'').replaceAll('\\','\\\\').replaceAll('(','\\(').replaceAll(')','\\)').replace(/[^\x20-\x7EáéíóúÁÉÍÓÚñÑüÜºª·|/.,:;_+\-= ]/g,' '); const wrapped=[]; [title,'',...lines].forEach(line=>{const s=safe(line); for(let i=0;i<s.length||i===0;i+=92) wrapped.push(s.slice(i,i+92));}); const pages=[]; for(let i=0;i<wrapped.length;i+=48) pages.push(wrapped.slice(i,i+48)); const objs=['<< /Type /Catalog /Pages 2 0 R >>','<< /Type /Pages /Kids [] /Count 0 >>','<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>']; const refs=[]; pages.forEach(page=>{const pageNo=objs.length+1, contentNo=pageNo+1; refs.push(`${pageNo} 0 R`); objs.push(`<< /Type /Page /Parent 2 0 R /MediaBox [0 0 842 595] /Resources << /Font << /F1 3 0 R >> >> /Contents ${contentNo} 0 R >>`); let y=560; const cmds=['BT','/F1 9 Tf']; page.forEach((line,idx)=>{if(idx===0&&line===title)cmds.push('/F1 14 Tf'); cmds.push(`1 0 0 1 36 ${y} Tm (${safe(line)}) Tj`); if(idx===0&&line===title)cmds.push('/F1 9 Tf'); y-=10.5;}); cmds.push('ET'); const stream=cmds.join('\n'); objs.push(`<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`);}); objs[1]=`<< /Type /Pages /Kids [${refs.join(' ')}] /Count ${pages.length} >>`; let pdf='%PDF-1.4\n'; const offsets=[0]; objs.forEach((o,i)=>{offsets.push(pdf.length); pdf+=`${i+1} 0 obj\n${o}\nendobj\n`;}); const x=pdf.length; pdf+=`xref\n0 ${objs.length+1}\n0000000000 65535 f \n`; offsets.slice(1).forEach(off=>pdf+=`${String(off).padStart(10,'0')} 00000 n \n`); pdf+=`trailer\n<< /Size ${objs.length+1} /Root 1 0 R >>\nstartxref\n${x}\n%%EOF`; return pdf; }
-  function download(blob,name){ const url=URL.createObjectURL(blob), a=document.createElement('a'); a.href=url; a.download=name; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(url),1200); }
-
-  function renderAlertas(){ const alerts=alertList(); refs.views.alertas.innerHTML=`<div class="stack"><section class="card"><div class="section-heading"><div><h2>Alertas</h2><p class="muted">A verificar, incidencias abiertas, máximos y revisión documental pendiente.</p></div>${badge(`${alerts.length} activas`,alerts.length?'danger':'success')}</div></section>${alerts.length?`<section class="stack">${alerts.map(renderAlertCard).join('')}</section>`:'<section class="card empty-state">No hay alertas activas.</section>'}</div>`; bindAlertCards(refs.views.alertas); }
-  function renderAlertCard(a){ return `<article class="alert-card alert-${esc(a.tone)}"><div class="section-heading"><div><h3>${esc(a.title)}</h3><p class="muted">${esc(a.detail)}</p></div>${badge(a.tone==='danger'?'Alerta':'Revisar',a.tone)}</div><div class="action-row">${a.productId?`<button class="secondary-button" data-edit-product="${a.productId}" type="button">Ver ficha</button>`:''}${a.resolvable?`<button class="primary-button" data-resolve-alert="${a.id}" type="button">Marcar resuelta</button>`:'<button class="ghost-button" type="button" disabled>No resoluble mientras persista la causa</button>'}</div></article>`; }
-  function bindAlertCards(root){ $$('[data-edit-product]',root).forEach(b=>b.addEventListener('click',()=>openProductEditor(b.dataset.editProduct,'ficha'))); $$('[data-resolve-alert]',root).forEach(b=>b.addEventListener('click',()=>mutate(s=>{if(!s.resolvedAlerts.includes(b.dataset.resolveAlert))s.resolvedAlerts.push(b.dataset.resolveAlert);},'Incidencia marcada como resuelta.'))); }
-
-  function renderMas(){ const products=state.products.filter(p=>!p.archived && searchMatch(p.name,p.registration,p.activeIngredients,p.mix,p.uses.map(u=>`${u.crop} ${u.target} ${u.ps}`).join(' '))); refs.views.mas.innerHTML=`<div class="stack"><section class="card"><div class="section-heading"><div><h2>Más</h2><p class="muted">Catálogo, borradores, copias e importación, ajustes.</p></div></div></section><section class="card"><div class="section-heading"><div><h2>Catálogo de productos</h2><p class="muted">${products.length} ficha(s) visibles.</p></div><button class="primary-button" id="newProduct" type="button">Nuevo producto</button></div><div class="stack">${products.length?products.map(renderProductCard).join(''):'<div class="empty-state">Aún no hay productos en el catálogo.</div>'}</div></section><section class="card"><div class="section-heading"><div><h2>Borradores</h2><p class="muted">${state.drafts.length} pendiente(s).</p></div></div>${state.drafts.length?`<div class="stack">${state.drafts.map(d=>`<article class="draft-card"><div class="section-heading"><div><h3>${esc(d.title)}</h3><p class="muted">${d.groups.length} fecha(s) · ${draftAppCount(d)} aplicación(es)</p></div></div><div class="action-row"><button class="secondary-button" data-resume-draft="${d.id}" type="button">Retomar</button><button class="danger-outline-button" data-discard-draft="${d.id}" type="button">Descartar</button></div></article>`).join('')}</div>`:'<div class="empty-state">Sin borradores.</div>'}</section><section class="card"><div class="section-heading"><div><h2>Copias e importación</h2><p class="muted">La copia completa incluye fichas, cuaderno, borradores y documentación.</p></div></div><div class="action-row"><button class="primary-button" id="backupDownload" type="button">Descargar copia completa</button><button class="secondary-button" id="backupImport" type="button">Importar copia</button></div><p class="small-note top-gap">Restauración por sustituir o fusionar, con conflictos revisables caso por caso.</p></section><section class="card"><div class="section-heading"><div><h2>Ajustes</h2><p class="muted">Configuración operativa de campaña.</p></div></div><form id="settingsForm" class="stack"><label class="field"><span>Aplicador activo</span><input class="field-input" name="applicator" value="${esc(state.settings.applicator)}" /></label><label class="field"><span>Litros/ha habituales</span><input class="field-input" name="defaultLha" type="number" step="0.001" value="${esc(state.settings.defaultLha)}" /></label><div class="action-row"><button class="primary-button" type="submit">Guardar ajustes</button></div></form></section></div>`; bindMas(); }
-  function renderProductCard(p){ return `<article class="product-card ${p.status!=='verified'?'has-alert':''}"><div class="section-heading"><div><h3>${esc(p.name)}</h3><p class="muted">Registro: ${esc(p.registration)} · ${prodCount(p.id)} uso(s) reales</p></div>${statusBadge(p)}</div><div class="meta-row">${badge(`MEZCLA: ${p.mix}`,p.mix==='SOLO'?'danger':'neutral')}${badge(`${p.docs.length} documento(s)`,p.docs.length?'info':'warning')}</div><div class="action-row top-gap"><button class="secondary-button" data-edit-product="${p.id}" data-tab="ficha" type="button">Ver ficha</button><button class="secondary-button" data-edit-product="${p.id}" data-tab="manual" type="button">Editar ficha</button><button class="secondary-button" data-edit-product="${p.id}" data-tab="docs" type="button">Documentación</button></div></article>`; }
-  function bindMas(){
-    $('#newProduct',refs.views.mas)?.addEventListener('click',()=>openProductEditor(null,'manual'));
-    $$('[data-edit-product]',refs.views.mas).forEach(b=>b.addEventListener('click',()=>openProductEditor(b.dataset.editProduct,b.dataset.tab||'ficha')));
-    $$('[data-resume-draft]',refs.views.mas).forEach(b=>b.addEventListener('click',()=>{ui.activeDraftId=b.dataset.resumeDraft; setView('nuevo');}));
-    $$('[data-discard-draft]',refs.views.mas).forEach(b=>b.addEventListener('click',()=>discardDraft(b.dataset.discardDraft)));
-    $('#backupDownload',refs.views.mas)?.addEventListener('click',backupDownload);
-    $('#backupImport',refs.views.mas)?.addEventListener('click',()=>refs.backupInput.click());
-    $('#settingsForm',refs.views.mas)?.addEventListener('submit',e=>{e.preventDefault(); const fd=new FormData(e.currentTarget), l=num(fd.get('defaultLha')); mutate(s=>{s.settings.applicator=String(fd.get('applicator')||'').trim()||s.settings.applicator; if(l!==null)s.settings.defaultLha=l;},'Ajustes guardados.');});
+        <section class="subcard compact-subcard">
+          <h3>Campos que siguen A verificar</h3>
+          ${pendingLabels.length ? `<p>${pendingLabels.map(escapeHtml).join(' · ')}</p>` : '<p class="muted">No quedan campos técnicos pendientes detectados por este análisis.</p>'}
+        </section>
+      </div>
+      ${warnings.length ? `<div class="warning-block" style="margin-top:12px"><strong>Avisos de extracción</strong><ul class="list-clean" style="margin-top:8px">${warnings.map(item => `<li>${escapeHtml(item)}</li>`).join('')}</ul></div>` : ''}
+      <p class="muted">Cuaderno actualizado en ${updatedRows} registro(s). Alertas resueltas automáticamente: ${resolvedAlerts}.</p>
+    `;
+    const decision = await choiceDialog('Resultado de la aplicación', body, [
+      { id: 'review', label: 'Revisar ficha manualmente', className: 'primary-btn' },
+      { id: 'close', label: 'Cerrar', className: 'ghost-btn' }
+    ]);
+    if (decision === 'review') return showEditProductModal(product.id);
+    render();
   }
 
-  function openProductEditor(id,tab='ficha'){
-    const existing=id?product(id):null;
-    const p=existing?JSON.parse(JSON.stringify(existing)):normalizeProduct({id:uid('prod'),name:'',uses:[blankUse()]});
-    ui.tab=tab;
-    modal(productModal(p,tab,Boolean(existing)),'wide-modal');
-    bindProductEditor(p.id,Boolean(existing));
+  function cleanProductSourceBase(value) {
+    const lines = String(value || '')
+      .split(/\r?\n/)
+      .map(line => line
+        .replace(/\s*[·-]?\s*Documentaci[oó]n asociada:\s*.*$/i, '')
+        .replace(/^Documentaci[oó]n asociada:\s*.*$/i, '')
+        .trim())
+      .filter(Boolean);
+    return Array.from(new Set(lines)).join('\n');
   }
-  function productModal(p,tab,exists){ return `<div class="modal-head"><div><h2>${esc(p.name||'Nueva ficha de producto')}</h2><p class="muted">${exists?'Ficha existente':'Alta provisional / nueva ficha'}</p></div><button class="icon-button" data-close-modal type="button">×</button></div><div class="tab-row"><button class="${tab==='ficha'?'active':''}" data-switch-tab="ficha" type="button">Ver ficha</button><button class="${tab==='manual'?'active':''}" data-switch-tab="manual" type="button">Editar ficha</button><button class="${tab==='docs'?'active':''}" data-switch-tab="docs" type="button">Documentación</button><button class="${tab==='review'?'active':''}" data-switch-tab="review" type="button">Revisión documental</button></div><div class="product-tab-panel">${tab==='ficha'?productFicha(p):tab==='manual'?productManual(p,exists):tab==='docs'?productDocs(p):productReviewIntro(p)}</div>`; }
-  function productFicha(p){ return `<div class="stack"><section class="panel nested-panel"><div class="section-heading"><div><h3>Estado de ficha</h3><p class="muted">${p.status==='verified'?'Todos los mínimos obligatorios están resueltos.':'Hay datos obligatorios A verificar.'}</p></div>${statusBadge(p)}</div><div class="info-grid"><div class="mini-metric"><span>N.º registro</span><strong>${esc(p.registration)}</strong></div><div class="mini-metric"><span>Principios activos</span><strong>${esc(p.activeIngredients)}</strong></div><div class="mini-metric"><span>MEZCLA</span><strong>${esc(p.mix)}</strong></div><div class="mini-metric"><span>Aplicaciones registradas</span><strong>${prodCount(p.id)}</strong></div></div></section><section class="panel nested-panel"><h3>Usos técnicos</h3><div class="stack">${p.uses.map(u=>`<article class="soft-box"><strong>${esc(u.crop||'Cultivo A verificar')} · ${esc(u.target||'Objetivo A verificar')}</strong><p class="small-note">Dosis: ${esc(u.doseDisplay)} · Volumen: ${esc(u.volumeDisplay)} · P.S.: ${esc(u.ps)} · Máx. campaña: ${esc(u.maxApplications??'A verificar')}</p></article>`).join('')}</div></section><section class="panel nested-panel"><h3>Fuente</h3>${sourceLines(p)||'<p class="muted">No hay documentación técnica asociada.</p>'}</section><div class="action-row"><button class="primary-button" data-switch-tab="manual" type="button">Editar ficha</button><button class="secondary-button" data-switch-tab="docs" type="button">Documentación técnica</button></div></div>`; }
-  function productManual(p,exists){ return `<form id="productForm" class="stack" data-product="${p.id}"><div class="form-grid"><label class="field"><span>Nombre comercial</span><input class="field-input" name="name" value="${esc(p.name==='Producto sin nombre'?'':p.name)}" required /></label><label class="field"><span>N.º de registro</span><input class="field-input" name="registration" value="${esc(p.registration)}" /></label></div><label class="field"><span>Principios activos</span><input class="field-input" name="activeIngredients" value="${esc(p.activeIngredients)}" /></label><label class="field"><span>MEZCLA</span><select class="field-select" name="mix">${['A verificar','——','SOLO'].map(o=>`<option value="${o}" ${p.mix===o?'selected':''}>${o}</option>`).join('')}</select></label><section class="panel nested-panel"><div class="section-heading"><div><h3>Usos autorizados / indicados</h3><p class="muted">Cada uso se guarda por cultivo y objetivo.</p></div><button class="secondary-button" id="addUse" type="button">Añadir uso</button></div><div id="useEditors" class="stack">${p.uses.map((u,n)=>useEditor(u,n)).join('')}</div></section><div class="action-row"><button class="primary-button" type="submit">Guardar ficha</button>${exists?`<button class="danger-outline-button" data-archive="${p.id}" type="button">${p.archived?'Reactivar':'Archivar'}</button>`:''}</div></form>`; }
-  function useEditor(u,n){ const dk=u.doseRule?.kind||'unset', vk=u.volumeRule?.kind||'unset'; return `<article class="review-card use-editor" data-use-index="${n}"><div class="section-heading"><h3>Uso ${n+1}</h3><button class="danger-outline-button" data-remove-use="${n}" type="button">Quitar</button></div><div class="form-grid"><label class="field"><span>Cultivo / uso</span><input class="field-input" name="crop_${n}" value="${esc(u.crop)}" /></label><label class="field"><span>Plaga / objetivo</span><input class="field-input" name="target_${n}" value="${esc(u.target)}" /></label></div><div class="form-grid"><label class="field"><span>P.S.</span><input class="field-input" name="ps_${n}" value="${esc(u.ps)}" /></label><label class="field"><span>Máx. aplicaciones campaña</span><input class="field-input" name="max_${n}" type="number" step="1" min="0" value="${u.maxApplications??''}" /></label></div><label class="field"><span>Dosis recomendada visible</span><input class="field-input" name="doseDisplay_${n}" value="${esc(u.doseDisplay)}" /></label><div class="form-grid"><label class="field"><span>Regla de dosis</span><select class="field-select dose-kind" name="doseKind_${n}" data-index="${n}"><option value="unset" ${dk==='unset'?'selected':''}>A verificar</option><option value="single" ${dk==='single'?'selected':''}>Dosis única</option><option value="range" ${dk==='range'?'selected':''}>Mínimo y máximo</option></select></label><label class="field"><span>Unidad dosis</span><select class="field-select" name="doseUnit_${n}"><option value="">A verificar</option>${units.map(x=>`<option value="${x}" ${u.doseRule?.unit===x?'selected':''}>${x}</option>`).join('')}</select></label></div><div class="form-grid"><label class="field dose-single-${n} ${dk==='single'?'':'hidden-field'}"><span>Valor único</span><input class="field-input" name="doseValue_${n}" type="number" step="0.001" value="${u.doseRule?.value??''}" /></label><label class="field dose-range-${n} ${dk==='range'?'':'hidden-field'}"><span>Mínimo</span><input class="field-input" name="doseMin_${n}" type="number" step="0.001" value="${u.doseRule?.min??''}" /></label><label class="field dose-range-${n} ${dk==='range'?'':'hidden-field'}"><span>Máximo</span><input class="field-input" name="doseMax_${n}" type="number" step="0.001" value="${u.doseRule?.max??''}" /></label><label class="field"><span>Límite por hectárea</span><input class="field-input" name="doseLimit_${n}" type="number" step="0.001" value="${u.doseRule?.limitHa??''}" /></label></div><label class="field"><span>Volumen caldo visible</span><input class="field-input" name="volumeDisplay_${n}" value="${esc(u.volumeDisplay)}" /></label><div class="form-grid"><label class="field"><span>Selector volumen caldo</span><select class="field-select volume-kind" name="volumeKind_${n}" data-index="${n}"><option value="unset" ${vk==='unset'?'selected':''}>A verificar</option><option value="single" ${vk==='single'?'selected':''}>Volumen único</option><option value="range" ${vk==='range'?'selected':''}>Volumen mínimo y máximo</option></select></label><label class="field"><span>Unidad</span><input class="field-input" value="L/ha" disabled /></label></div><div class="form-grid"><label class="field volume-single-${n} ${vk==='single'?'':'hidden-field'}"><span>Volumen único L/ha</span><input class="field-input" name="volumeValue_${n}" type="number" step="0.001" value="${u.volumeRule?.value??''}" /></label><label class="field volume-range-${n} ${vk==='range'?'':'hidden-field'}"><span>Mínimo L/ha</span><input class="field-input" name="volumeMin_${n}" type="number" step="0.001" value="${u.volumeRule?.min??''}" /></label><label class="field volume-range-${n} ${vk==='range'?'':'hidden-field'}"><span>Máximo L/ha</span><input class="field-input" name="volumeMax_${n}" type="number" step="0.001" value="${u.volumeRule?.max??''}" /></label></div><div class="form-grid"><label class="field"><span>Intervalo / condiciones</span><input class="field-input" name="interval_${n}" value="${esc(u.interval)}" /></label><label class="field"><span>Estadio</span><input class="field-input" name="stadium_${n}" value="${esc(u.stadium)}" /></label></div><label class="field"><span>Información adicional</span><textarea class="field-textarea" name="extra_${n}">${esc(u.extra)}</textarea></label></article>`; }
-  function productDocs(p){ return `<div class="stack"><section class="panel nested-panel"><div class="section-heading"><div><h3>Documentación técnica asociada</h3><p class="muted">Imágenes optimizadas y PDF/documentos consultables.</p></div><button class="primary-button" data-add-docs="${p.id}" type="button">Añadir archivos</button></div>${p.docs.length?`<div class="stack">${p.docs.map(d=>docCard(p.id,d)).join('')}</div>`:'<div class="empty-state">Sin documentación asociada.</div>'}</section><section class="panel nested-panel"><h3>Fuente</h3>${sourceLines(p)||'<p class="muted">No hay documentación técnica asociada.</p>'}</section><div class="action-row"><button class="secondary-button" data-switch-tab="review" type="button">Revisar desde documentación</button></div></div>`; }
-  function docCard(productId,d){ const img=String(d.type||'').startsWith('image/'), pdf=d.type==='application/pdf'||/\.pdf$/i.test(d.name||''); return `<article class="document-card"><div class="section-heading"><div><h3>${esc(d.name)}</h3><p class="muted">Aportado el ${fmtDate(d.addedOn)} · ${fmtNum(Math.round((d.size||0)/1024))} KB</p></div>${badge(img?'Imagen':pdf?'PDF':'Documento','info')}</div><div class="action-row">${img?`<button class="secondary-button" data-view-image="${d.id}" data-product-id="${productId}" type="button">Ver imagen ampliada</button>`:''}${pdf?`<button class="secondary-button" data-view-pdf="${d.id}" data-product-id="${productId}" type="button">Ver PDF</button>`:''}<button class="danger-outline-button" data-delete-doc="${d.id}" data-product-id="${productId}" type="button">Eliminar</button></div></article>`; }
-  function sourceLines(p){ if(!p.docs.length) return ''; const groups=new Map(); p.docs.forEach(d=>{const k=d.addedOn||todayIso(); if(!groups.has(k))groups.set(k,[]); groups.get(k).push(d.name);}); return [...groups.entries()].sort((a,b)=>b[0].localeCompare(a[0])).map(([date,names])=>`<p class="source-line"><strong>Documentación aportada el ${fmtDate(date)}:</strong> ${esc([...new Set(names)].join(', '))}.</p>`).join(''); }
-  function productReviewIntro(p){ return `<div class="stack"><section class="panel nested-panel"><h3>Extracción documental revisable</h3><p class="muted">La app propone datos con evidencia y confianza. No valida automáticamente datos dudosos.</p><div class="action-row"><button class="primary-button" data-run-review="${p.id}" type="button">Analizar documentación asociada</button></div></section><section class="panel nested-panel"><p class="small-note">Se prioriza texto real de PDF cuando está disponible. Las imágenes se conservan y se revisan en visor interno; esta versión no incorpora OCR pesado local.</p></section></div>`; }
 
-  function bindProductEditor(productId,exists){
-    $$('[data-switch-tab]',refs.modal).forEach(b=>b.addEventListener('click',()=>{const p=product(productId)||normalizeProduct({id:productId,uses:[blankUse()]}); modal(productModal(p,b.dataset.switchTab,Boolean(product(productId))),'wide-modal'); bindProductEditor(p.id,Boolean(product(p.id)));}));
-    $('#addUse',refs.modal)?.addEventListener('click',()=>{const p=collectProductForm($('#productForm',refs.modal),productId,exists); p.uses.push(blankUse()); modal(productModal(p,'manual',exists),'wide-modal'); bindProductEditor(p.id,exists);});
-    $$('[data-remove-use]',refs.modal).forEach(b=>b.addEventListener('click',()=>{const p=collectProductForm($('#productForm',refs.modal),productId,exists); if(p.uses.length<=1) return toast('Debe existir al menos un uso técnico.','danger'); p.uses.splice(Number(b.dataset.removeUse),1); modal(productModal(p,'manual',exists),'wide-modal'); bindProductEditor(p.id,exists);}));
-    $$('.dose-kind',refs.modal).forEach(s=>s.addEventListener('change',()=>toggleDoseInputs(s.dataset.index,s.value)));
-    $$('.volume-kind',refs.modal).forEach(s=>s.addEventListener('change',()=>toggleVolumeInputs(s.dataset.index,s.value)));
-    $('#productForm',refs.modal)?.addEventListener('submit',e=>{e.preventDefault(); const p=collectProductForm(e.currentTarget,productId,exists); if(!p.name.trim()||p.name==='Producto sin nombre') return toast('El nombre comercial es obligatorio.','danger'); mutate(s=>{const n=s.products.findIndex(x=>x.id===p.id); if(n>=0)s.products[n]=p; else s.products.push(p);},p.status==='verified'?'Ficha guardada y verificada.':'Ficha guardada A verificar.'); closeModal();});
-    $('[data-archive]',refs.modal)?.addEventListener('click',b=>{mutate(s=>{const p=s.products.find(x=>x.id===b.dataset.archive); if(p){p.archived=!p.archived;p.updatedAt=nowIso();}},'Estado del producto actualizado.'); closeModal();});
-    $$('[data-add-docs]',refs.modal).forEach(b=>b.addEventListener('click',()=>{ui.pendingDocProductId=b.dataset.addDocs; refs.docsInput.click();}));
-    $$('[data-view-image]',refs.modal).forEach(b=>b.addEventListener('click',()=>viewImage(b.dataset.productId,b.dataset.viewImage)));
-    $$('[data-view-pdf]',refs.modal).forEach(b=>b.addEventListener('click',()=>viewPdf(b.dataset.productId,b.dataset.viewPdf)));
-    $$('[data-delete-doc]',refs.modal).forEach(b=>b.addEventListener('click',()=>deleteDocument(b.dataset.productId,b.dataset.deleteDoc)));
-    $('[data-run-review]',refs.modal)?.addEventListener('click',b=>runReview(b.dataset.runReview));
+  function renderProductSource(product) {
+    ensureProductDocumentShape(product);
+    const base = cleanProductSourceBase(product.source);
+    const baseLines = base
+      ? base.split(/\r?\n/).map(line => `<div>${escapeHtml(line)}</div>`).join('')
+      : '';
+    const docLines = renderProductDocumentSourceGroups(product.documents || []);
+    if (!baseLines && !docLines) return '<span>—</span>';
+    return `<div class="product-source-list">${baseLines}${docLines}</div>`;
   }
-  function toggleDoseInputs(n,kind){ $$('.dose-single-'+n,refs.modal).forEach(x=>x.classList.toggle('hidden-field',kind!=='single')); $$('.dose-range-'+n,refs.modal).forEach(x=>x.classList.toggle('hidden-field',kind!=='range')); }
-  function toggleVolumeInputs(n,kind){ $$('.volume-single-'+n,refs.modal).forEach(x=>x.classList.toggle('hidden-field',kind!=='single')); $$('.volume-range-'+n,refs.modal).forEach(x=>x.classList.toggle('hidden-field',kind!=='range')); }
-  function collectProductForm(form,id,exists){ const old=product(id), fd=new FormData(form), uses=[]; $$('.use-editor',form).forEach((_,n)=>{const dk=String(fd.get(`doseKind_${n}`)||'unset'), vk=String(fd.get(`volumeKind_${n}`)||'unset'); uses.push(normalizeUse({id:old?.uses?.[n]?.id||uid('uso'),crop:String(fd.get(`crop_${n}`)||'').trim(),target:String(fd.get(`target_${n}`)||'').trim(),ps:String(fd.get(`ps_${n}`)||'').trim()||'A verificar',maxApplications:num(fd.get(`max_${n}`)),doseDisplay:String(fd.get(`doseDisplay_${n}`)||'').trim()||'A verificar',doseRule:{kind:dk,unit:String(fd.get(`doseUnit_${n}`)||'').trim(),value:dk==='single'?num(fd.get(`doseValue_${n}`)):null,min:dk==='range'?num(fd.get(`doseMin_${n}`)):null,max:dk==='range'?num(fd.get(`doseMax_${n}`)):null,limitHa:num(fd.get(`doseLimit_${n}`))},volumeDisplay:String(fd.get(`volumeDisplay_${n}`)||'').trim()||'A verificar',volumeRule:{kind:vk,value:vk==='single'?num(fd.get(`volumeValue_${n}`)):null,min:vk==='range'?num(fd.get(`volumeMin_${n}`)):null,max:vk==='range'?num(fd.get(`volumeMax_${n}`)):null},interval:String(fd.get(`interval_${n}`)||'').trim(),stadium:String(fd.get(`stadium_${n}`)||'').trim(),extra:String(fd.get(`extra_${n}`)||'').trim()}));}); const p=normalizeProduct({...old,id:id||uid('prod'),name:String(fd.get('name')||old?.name||'').trim(),registration:String(fd.get('registration')||'').trim()||'A verificar',activeIngredients:String(fd.get('activeIngredients')||'').trim()||'A verificar',mix:String(fd.get('mix')||'A verificar'),uses:uses.length?uses:[blankUse()],docs:old?.docs||[],archived:old?.archived||false,createdAt:old?.createdAt||nowIso(),updatedAt:nowIso()}); p.status=productIsVerified(p)?'verified':'pending'; return p; }
 
-  async function optimizeImage(file){ return new Promise((res,rej)=>{const img=new Image(), url=URL.createObjectURL(file); img.onload=()=>{try{const max=1800, r=Math.min(1,max/Math.max(img.width,img.height)), canvas=document.createElement('canvas'); canvas.width=Math.round(img.width*r); canvas.height=Math.round(img.height*r); canvas.getContext('2d').drawImage(img,0,0,canvas.width,canvas.height); canvas.toBlob(blob=>{URL.revokeObjectURL(url); blob?res(blob):rej(new Error('No blob'));},file.type==='image/png'?'image/png':'image/jpeg',0.88);}catch(e){URL.revokeObjectURL(url);rej(e);}}; img.onerror=()=>{URL.revokeObjectURL(url);rej(new Error('Imagen no legible'));}; img.src=url;}); }
-  async function addDocs(productId,files){ const p=product(productId); if(!p||!files.length) return; const docs=[]; for(const file of files){let blob=file; if(file.type?.startsWith('image/')){try{blob=await optimizeImage(file);}catch{blob=file;}} const d={id:uid('doc'),name:file.name||`documento_${Date.now()}`,type:blob.type||file.type||'application/octet-stream',size:blob.size||file.size||0,addedOn:todayIso(),createdAt:nowIso()}; await putDoc(d.id,blob); docs.push(d);} mutate(s=>{const pp=s.products.find(x=>x.id===productId); pp.docs.push(...docs); pp.updatedAt=nowIso();},'Documentación asociada.'); const fresh=product(productId); modal(productModal(fresh,'docs',true),'wide-modal'); bindProductEditor(productId,true); }
-  async function viewImage(productId,docId){ const p=product(productId), d=p?.docs.find(x=>x.id===docId), blob=await getDoc(docId); if(!d||!blob) return toast('No se pudo abrir la imagen.','danger'); const url=URL.createObjectURL(blob); modal(`<div class="modal-head"><h2>Ver imagen ampliada</h2><button class="icon-button" data-close-modal type="button">×</button></div><div class="image-viewer"><img src="${url}" alt="${esc(d.name)}" /></div><div class="action-row"><button class="secondary-button" id="backDocs" type="button">Volver al visor documental</button></div>`,'wide-modal'); $('#backDocs',refs.modal)?.addEventListener('click',()=>{URL.revokeObjectURL(url); const fresh=product(productId); modal(productModal(fresh,'docs',true),'wide-modal'); bindProductEditor(productId,true);}); }
-  async function viewPdf(productId,docId){ const p=product(productId), d=p?.docs.find(x=>x.id===docId), blob=await getDoc(docId); if(!d||!blob) return toast('No se pudo abrir el PDF.','danger'); const url=URL.createObjectURL(blob); modal(`<div class="modal-head"><h2>${esc(d.name)}</h2><button class="icon-button" data-close-modal type="button">×</button></div><iframe class="pdf-frame" src="${url}" title="${esc(d.name)}"></iframe><div class="action-row"><button class="secondary-button" id="backDocs" type="button">Volver al visor documental</button></div>`,'wide-modal'); $('#backDocs',refs.modal)?.addEventListener('click',()=>{URL.revokeObjectURL(url); const fresh=product(productId); modal(productModal(fresh,'docs',true),'wide-modal'); bindProductEditor(productId,true);}); }
-  function deleteDocument(productId,docId){ confirmBox('Eliminar documentación','El archivo se retirará de la ficha y Fuente se actualizará automáticamente.',async()=>{await delDoc(docId); mutate(s=>{const p=s.products.find(x=>x.id===productId); p.docs=p.docs.filter(d=>d.id!==docId); p.updatedAt=nowIso();},'Documento eliminado.'); const fresh=product(productId); modal(productModal(fresh,'docs',true),'wide-modal'); bindProductEditor(productId,true);},'Eliminar',true); }
-  async function runReview(productId){ const p=product(productId); if(!p||!p.docs.length) return toast('No hay documentación para revisar.','danger'); const files=[]; for(const d of p.docs){const blob=await getDoc(d.id); if(blob) files.push(new File([blob],d.name,{type:d.type}));} const text=window.DocumentAssist?.extractTextFromFiles?await window.DocumentAssist.extractTextFromFiles(files):''; const proposals=reviewProposals(p,text); modal(reviewModal(p,proposals,text),'wide-modal'); $('#reviewForm',refs.modal)?.addEventListener('submit',e=>{e.preventDefault(); const fd=new FormData(e.currentTarget); mutate(s=>{const pp=s.products.find(x=>x.id===productId); const u=pp.uses[0]||blankUse(); if(!pp.uses.length) pp.uses.push(u); proposals.forEach((pr,n)=>{if(!fd.get(`accept_${n}`)) return; const value=String(fd.get(`value_${n}`)||'').trim(); if(!value) return; if(pr.scope==='product') pp[pr.key]=value; else u[pr.key]=pr.key==='maxApplications'?num(value):value;}); pp.status=productIsVerified(pp)?'verified':'pending'; pp.updatedAt=nowIso();},'Datos confirmados aplicados.'); closeModal();}); }
-  function reviewProposals(p,text){ const t=String(text||'').replace(/\s+/g,' ').trim(), u=p.uses[0]||blankUse(); const reg=t.match(/\b(?:ES[-\s]?)?(\d{4,6})\b/)?.[1]||''; const active=t.match(/(?:composici[oó]n|sustancia activa|principio[s]? activo[s]?)[^.;:]{0,20}[:\-]?\s*([^.;]{4,120})/i)?.[1]?.trim()||''; const solo=/\b(aplicar solo|no mezclar|solo)\b/i.test(t); const ps=t.match(/(?:plazo de seguridad|p\.?\s*s\.?)[^0-9]{0,20}(\d{1,3})\s*d[ií]as?/i)?.[1]||''; const max=t.match(/(?:máx(?:imo)?\.?\s*(?:de)?\s*aplicaciones|n[uú]mero máximo de aplicaciones)[^0-9]{0,20}(\d{1,2})/i)?.[1]||''; const dose=t.match(/(\d+(?:[.,]\d+)?)\s*(?:-|a)\s*(\d+(?:[.,]\d+)?)\s*(g\/h[lL]|kg\/h[lL]|m[lL]\/h[lL]|l\/h[lL]|g\/ha|kg\/ha|m[lL]\/ha|l\/ha)/i)?.[0]||t.match(/(\d+(?:[.,]\d+)?)\s*(g\/h[lL]|kg\/h[lL]|m[lL]\/h[lL]|l\/h[lL]|g\/ha|kg\/ha|m[lL]\/ha|l\/ha)/i)?.[0]||''; const vol=t.match(/(\d+(?:[.,]\d+)?)\s*(?:-|a)\s*(\d+(?:[.,]\d+)?)\s*l\/ha/i)?.[0]||t.match(/(\d+(?:[.,]\d+)?)\s*l\/ha/i)?.[0]||''; return [
-    {key:'registration',label:'N.º de registro',proposal:reg||p.registration,evidence:reg?`Coincidencia numérica: ${reg}`:'No se encontró evidencia inequívoca.',confidence:reg?'Media':'Baja',scope:'product'},
-    {key:'activeIngredients',label:'Principios activos',proposal:active||p.activeIngredients,evidence:active?active:'No se encontró bloque textual claro.',confidence:active?'Media':'Baja',scope:'product'},
-    {key:'mix',label:'MEZCLA',proposal:solo?'SOLO':p.mix,evidence:solo?'Se detecta referencia textual a aplicación sin mezcla.':'No consta evidencia inequívoca de SOLO.',confidence:solo?'Media':'Baja',scope:'product'},
-    {key:'ps',label:'P.S.',proposal:ps?`${ps} días`:u.ps,evidence:ps?`${ps} días`:'No se encontró P.S. inequívoco.',confidence:ps?'Media':'Baja',scope:'use'},
-    {key:'maxApplications',label:'Máx. aplicaciones campaña',proposal:max||u.maxApplications||'',evidence:max?max:'No se encontró límite inequívoco.',confidence:max?'Media':'Baja',scope:'use'},
-    {key:'doseDisplay',label:'Dosis recomendada',proposal:dose||u.doseDisplay,evidence:dose||'No se encontró dosis inequívoca.',confidence:dose?'Media':'Baja',scope:'use'},
-    {key:'volumeDisplay',label:'Volumen caldo',proposal:vol||u.volumeDisplay,evidence:vol||'No se encontró volumen inequívoco en L/ha.',confidence:vol?'Media':'Baja',scope:'use'}
-  ]; }
-  function reviewModal(p,prs,text){ return `<div class="modal-head"><div><h2>Revisión documental · ${esc(p.name)}</h2><p class="muted">Confirma cada recuadro azul o corrige manualmente antes de aplicar.</p></div><button class="icon-button" data-close-modal type="button">×</button></div><form id="reviewForm" class="stack">${prs.map((pr,n)=>`<article class="review-card"><div class="section-heading"><div><h3>${esc(pr.label)}</h3><p class="muted">Confianza: ${esc(pr.confidence)}</p></div>${badge(pr.confidence,pr.confidence==='Media'?'info':'warning')}</div><p class="small-note"><strong>Evidencia:</strong> ${esc(pr.evidence)}</p><label class="field"><span>Propuesta / corrección manual</span><input class="field-input" name="value_${n}" value="${esc(pr.proposal||'')}" /></label><label class="checkbox-card blue-check"><input type="checkbox" name="accept_${n}" /><span>Confirmo este dato</span></label></article>`).join('')}<section class="panel nested-panel"><h3>Texto detectado</h3><p class="small-note">${esc((text||'Sin texto estructurado disponible.').slice(0,1800))}</p></section><div class="action-row"><button class="secondary-button" data-close-modal type="button">Cancelar</button><button class="primary-button" type="submit">Aplicar datos confirmados</button></div></form>`; }
-
-  function blobToDataUrl(blob){ return new Promise((res,rej)=>{const r=new FileReader(); r.onload=()=>res(r.result); r.onerror=()=>rej(r.error); r.readAsDataURL(blob);}); }
-  function dataUrlBlob(url){ const [head,body]=String(url).split(','), mime=head.match(/data:(.*?);base64/i)?.[1]||'application/octet-stream', raw=atob(body||''), arr=new Uint8Array(raw.length); for(let i=0;i<raw.length;i++)arr[i]=raw.charCodeAt(i); return new Blob([arr],{type:mime}); }
-  async function backupDownload(){ const docs=[]; for(const p of state.products){for(const d of p.docs){const blob=await getDoc(d.id); if(blob) docs.push({id:d.id,dataUrl:await blobToDataUrl(blob)});}} const payload={backupType:'CT-APP-V2-COMPLETE',createdAt:nowIso(),appVersion:VERSION,state,docs}; download(new Blob([JSON.stringify(payload,null,2)],{type:'application/json'}),'copia_completa_app_cuaderno_tratamientos_v2_0.json'); toast('Copia completa descargada.'); }
-  async function importBackup(file){ if(!file) return; let payload; try{payload=JSON.parse(await file.text());}catch{return toast('El archivo no es JSON válido.','danger');} if(!payload?.state||!String(payload.backupType||'').startsWith('CT-APP-V2')) return toast('La copia no pertenece a esta app.','danger'); modal(`<div class="modal-head"><h2>Importar copia</h2><button class="icon-button" data-close-modal type="button">×</button></div><p>Elige el modo de restauración.</p><div class="choice-grid"><button class="menu-card" data-import-mode="replace" type="button"><strong>Sustituir</strong><span>Reemplaza todos los datos locales actuales.</span></button><button class="menu-card" data-import-mode="merge" type="button"><strong>Fusionar</strong><span>Conserva lo actual y revisa conflictos producto a producto.</span></button></div>`); $$('[data-import-mode]',refs.modal).forEach(b=>b.addEventListener('click',()=>b.dataset.importMode==='replace'?replaceBackup(payload):mergeBackup(payload))); }
-  async function restoreDocs(docs){ for(const d of docs||[]){ if(d?.id&&d?.dataUrl) await putDoc(d.id,dataUrlBlob(d.dataUrl)); } }
-  async function replaceBackup(payload){ await restoreDocs(payload.docs); state=migrate(payload.state); state.importHistory.push({date:nowIso(),mode:'replace'}); save(); closeModal(); renderAll(); toast('Copia restaurada por sustitución.'); }
-  function mergeBackup(payload){ const incoming=migrate(payload.state); const conflicts=incoming.products.map(p=>({incoming:p,existing:byName(p.name)})).filter(x=>x.existing); if(!conflicts.length) return performMerge(payload,{}); modal(`<div class="modal-head"><h2>Resolver conflictos de productos</h2><button class="icon-button" data-close-modal type="button">×</button></div><form id="conflictForm" class="stack">${conflicts.map((c,n)=>`<article class="review-card"><h3>${esc(c.incoming.name)}</h3><p class="muted">Existe una ficha local con el mismo nombre.</p><label class="choice-line"><input type="radio" name="c_${n}" value="keep" checked /><span>Conservar ficha local</span></label><label class="choice-line"><input type="radio" name="c_${n}" value="replace" /><span>Usar ficha importada</span></label></article>`).join('')}<div class="action-row"><button class="secondary-button" data-close-modal type="button">Cancelar</button><button class="primary-button" type="submit">Fusionar</button></div></form>`,'wide-modal'); $('#conflictForm',refs.modal)?.addEventListener('submit',e=>{e.preventDefault(); const fd=new FormData(e.currentTarget), decisions={}; conflicts.forEach((c,n)=>decisions[norm(c.incoming.name)]=fd.get(`c_${n}`)||'keep'); performMerge(payload,decisions);}); }
-  async function performMerge(payload,decisions){ await restoreDocs(payload.docs); const incoming=migrate(payload.state); mutate(s=>{incoming.products.forEach(p=>{const local=s.products.find(x=>norm(x.name)===norm(p.name)); if(!local)s.products.push(p); else if(decisions[norm(p.name)]==='replace'){const n=s.products.findIndex(x=>x.id===local.id); s.products[n]=p;}}); incoming.interventions.forEach(i=>{let local=s.interventions.find(x=>x.date===i.date); if(!local)s.interventions.push(i); else i.applications.forEach(a=>{if(!local.applications.some(x=>x.productId===a.productId&&x.lot===a.lot))local.applications.push(a);});}); incoming.drafts.forEach(d=>{if(!s.drafts.some(x=>x.id===d.id))s.drafts.push(d);}); s.interventions.sort((a,b)=>a.date.localeCompare(b.date)); s.importHistory.push({date:nowIso(),mode:'merge'});},'Copia fusionada.'); closeModal(); }
-
-  function bindGlobal(){
-    refs.nav.forEach(b=>b.addEventListener('click',()=>setView(b.dataset.nav)));
-    refs.search?.addEventListener('input',e=>{ui.search=e.currentTarget.value; renderAll(); refs.search.focus(); try{refs.search.setSelectionRange(refs.search.value.length,refs.search.value.length);}catch{}});
-    refs.docsInput?.addEventListener('change',async e=>{const files=[...(e.currentTarget.files||[])], id=ui.pendingDocProductId; ui.pendingDocProductId=null; e.currentTarget.value=''; if(id&&files.length) await addDocs(id,files);});
-    refs.backupInput?.addEventListener('change',async e=>{await importBackup(e.currentTarget.files?.[0]); e.currentTarget.value='';});
-    window.addEventListener('beforeinstallprompt',e=>{e.preventDefault(); ui.installPrompt=e; refs.install?.classList.remove('install-hidden');});
-    refs.install?.addEventListener('click',async()=>{if(!ui.installPrompt)return; ui.installPrompt.prompt(); await ui.installPrompt.userChoice; ui.installPrompt=null; refs.install.classList.add('install-hidden');});
+  function renderProductDocumentSourceGroups(docs) {
+    const groups = new Map();
+    (docs || []).forEach(doc => {
+      const day = documentContributionDate(doc);
+      const names = groups.get(day) || [];
+      const name = String(doc?.name || 'Documento técnico').trim() || 'Documento técnico';
+      if (!names.includes(name)) names.push(name);
+      groups.set(day, names);
+    });
+    return Array.from(groups.entries())
+      .sort(([a], [b]) => b.localeCompare(a))
+      .map(([day, names]) => `<div><strong>${escapeHtml(formatDate(day))}</strong>: ${names.map(escapeHtml).join(', ')}</div>`)
+      .join('');
   }
-  function setupSW(){ if(!('serviceWorker' in navigator)) return; window.addEventListener('load',async()=>{try{const reg=await navigator.serviceWorker.register('./sw.js?v=2.0.0',{updateViaCache:'none'}); reg.update();}catch{toast('La app funciona, pero no se pudo activar el modo sin conexión.','warning');}}); }
 
-  bindGlobal(); setupSW(); renderAll();
+  function documentContributionDate(doc) {
+    const raw = String(doc?.createdAt || '').slice(0, 10);
+    return isIsoDate(raw) ? raw : todayLocalIso();
+  }
+
+  async function normalizeProductDocumentFile(file) {
+    const mime = file?.type || inferMimeFromName(file?.name || '');
+    if (mime.startsWith('image/')) return compressImageFileForStorage(file);
+    if (mime === 'application/pdf') {
+      const dataUrl = await readFileAsDataUrl(file);
+      return { dataUrl, mimeType: 'application/pdf', optimized: false, sizeStored: estimateDataUrlBytes(dataUrl) };
+    }
+    throw new Error('Formato no admitido');
+  }
+
+  function inferMimeFromName(name) {
+    const lower = String(name || '').toLowerCase();
+    if (lower.endsWith('.pdf')) return 'application/pdf';
+    if (lower.endsWith('.png')) return 'image/png';
+    if (lower.endsWith('.webp')) return 'image/webp';
+    if (lower.endsWith('.jpg') || lower.endsWith('.jpeg')) return 'image/jpeg';
+    return '';
+  }
+
+  async function compressImageFileForStorage(file) {
+    const original = await readFileAsDataUrl(file);
+    const image = await loadImageFromDataUrl(original);
+    const maxSide = 2200;
+    const ratio = Math.min(1, maxSide / Math.max(image.naturalWidth || image.width || 1, image.naturalHeight || image.height || 1));
+    const width = Math.max(1, Math.round((image.naturalWidth || image.width || 1) * ratio));
+    const height = Math.max(1, Math.round((image.naturalHeight || image.height || 1) * ratio));
+    const canvas = document.createElement('canvas');
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext('2d', { willReadFrequently: false });
+    ctx.drawImage(image, 0, 0, width, height);
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.84);
+    return { dataUrl, mimeType: 'image/jpeg', optimized: true, sizeStored: estimateDataUrlBytes(dataUrl) };
+  }
+
+  function readFileAsDataUrl(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(reader.error || new Error('No se pudo leer el archivo.'));
+      reader.onload = () => resolve(String(reader.result || ''));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function loadImageFromDataUrl(dataUrl) {
+    return new Promise((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => resolve(image);
+      image.onerror = () => reject(new Error('No se pudo procesar la imagen.'));
+      image.src = dataUrl;
+    });
+  }
+
+  function estimateDataUrlBytes(dataUrl) {
+    const text = String(dataUrl || '');
+    const base64 = text.includes(',') ? text.split(',').pop() : text;
+    if (!base64) return 0;
+    const padding = base64.endsWith('==') ? 2 : base64.endsWith('=') ? 1 : 0;
+    return Math.max(0, Math.floor(base64.length * 0.75) - padding);
+  }
+
+  async function extractTextFromProductDocument(file, stored, getOcrWorker) {
+    if (stored.mimeType === 'application/pdf') return extractTextFromPdfFile(file, getOcrWorker);
+    if (stored.mimeType.startsWith('image/')) return extractTextFromImageDataUrl(stored.dataUrl, getOcrWorker);
+    return '';
+  }
+
+  let pdfJsLoaderPromise = null;
+  async function loadPdfJsLibrary() {
+    if (!pdfJsLoaderPromise) {
+      pdfJsLoaderPromise = import('https://cdn.jsdelivr.net/npm/pdfjs-dist@5.6.205/build/pdf.min.mjs').then(module => {
+        module.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@5.6.205/build/pdf.worker.min.mjs';
+        return module;
+      });
+    }
+    return pdfJsLoaderPromise;
+  }
+
+  let tesseractLoaderPromise = null;
+  function loadTesseractLibrary() {
+    if (window.Tesseract) return Promise.resolve(window.Tesseract);
+    if (!tesseractLoaderPromise) {
+      tesseractLoaderPromise = loadExternalScript('https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js').then(() => {
+        if (!window.Tesseract) throw new Error('Tesseract.js no quedó disponible.');
+        return window.Tesseract;
+      });
+    }
+    return tesseractLoaderPromise;
+  }
+
+  function loadExternalScript(src) {
+    return new Promise((resolve, reject) => {
+      const existing = Array.from(document.scripts).find(script => script.src === src);
+      if (existing && existing.dataset.loaded === 'true') return resolve();
+      if (existing) {
+        existing.addEventListener('load', () => resolve(), { once: true });
+        existing.addEventListener('error', () => reject(new Error(`No se pudo cargar ${src}`)), { once: true });
+        return;
+      }
+      const script = document.createElement('script');
+      script.src = src;
+      script.async = true;
+      script.dataset.dynamicLib = 'true';
+      script.addEventListener('load', () => { script.dataset.loaded = 'true'; resolve(); }, { once: true });
+      script.addEventListener('error', () => reject(new Error(`No se pudo cargar ${src}`)), { once: true });
+      document.head.appendChild(script);
+    });
+  }
+
+  async function extractTextFromImageDataUrl(dataUrl, getOcrWorker) {
+    const worker = await getOcrWorker();
+    const result = await worker.recognize(dataUrl);
+    return result?.data?.text || '';
+  }
+
+  async function extractTextFromPdfFile(file, getOcrWorker) {
+    const pdfjsLib = await loadPdfJsLibrary();
+    const data = await file.arrayBuffer();
+    const loadingTask = pdfjsLib.getDocument({ data });
+    const pdf = await loadingTask.promise;
+    const maxPagesText = Math.min(pdf.numPages || 0, 10);
+    const textParts = [];
+    for (let pageNumber = 1; pageNumber <= maxPagesText; pageNumber += 1) {
+      updateBusyModal(`Leyendo PDF: página ${pageNumber}/${maxPagesText}…`, file.name || 'PDF técnico');
+      const page = await pdf.getPage(pageNumber);
+      const content = await page.getTextContent();
+      const text = (content.items || []).map(item => item.str || '').join(' ').replace(/\s+/g, ' ').trim();
+      if (text) textParts.push(text);
+    }
+    const digitalText = textParts.join('\n\n').trim();
+    if (digitalText.length >= 180) return digitalText;
+
+    const maxPagesOcr = Math.min(pdf.numPages || 0, 4);
+    const ocrParts = [];
+    for (let pageNumber = 1; pageNumber <= maxPagesOcr; pageNumber += 1) {
+      updateBusyModal(`OCR de PDF: página ${pageNumber}/${maxPagesOcr}…`, file.name || 'PDF técnico');
+      const page = await pdf.getPage(pageNumber);
+      const viewport = page.getViewport({ scale: 1.7 });
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.ceil(viewport.width);
+      canvas.height = Math.ceil(viewport.height);
+      const ctx = canvas.getContext('2d', { willReadFrequently: false });
+      await page.render({ canvasContext: ctx, viewport }).promise;
+      const dataUrl = canvas.toDataURL('image/jpeg', 0.90);
+      const ocrText = await extractTextFromImageDataUrl(dataUrl, getOcrWorker);
+      if (ocrText && ocrText.trim()) ocrParts.push(ocrText.trim());
+    }
+    return [digitalText, ocrParts.join('\n\n')].filter(Boolean).join('\n\n');
+  }
+
+  function buildProductSuggestionsFromDocumentText(product, text) {
+    const source = normalizeExtractionText(text);
+    const suggestions = { pendingLabels: [], meta: {} };
+    if (!source) {
+      suggestions.pendingLabels = pendingLabelsForProduct(product);
+      return suggestions;
+    }
+
+    const context = getProductExtractionContext(product);
+    const tableEvidence = extractStructuredUseTableEvidence(source, context);
+
+    addDocumentSuggestion(suggestions, 'registration', extractRegistrationFromText(source), {
+      label: 'N.º de registro',
+      confidence: 'alta',
+      evidence: 'Patrón de registro ES-xxxxx detectado.'
+    });
+
+    const activeIngredients = extractActiveIngredientsFromText(text);
+    addDocumentSuggestion(suggestions, 'activeIngredients', activeIngredients, {
+      label: 'Principios activos',
+      confidence: activeIngredients ? 'alta' : 'media',
+      evidence: activeIngredients ? 'Línea de composición localizada.' : ''
+    });
+
+    const mixRule = extractMixRuleFromText(source);
+    addDocumentSuggestion(suggestions, 'mixRule', mixRule, {
+      label: 'MEZCLA',
+      confidence: mixRule ? 'alta' : 'media',
+      evidence: mixRule === 'SOLO' ? 'Texto equivalente a no combinar con otros productos.' : ''
+    });
+
+    const extractedUses = extractAuthorizedUsesFromText(source, context);
+    addDocumentSuggestion(suggestions, 'allowedUses', extractedUses, {
+      label: 'Cultivo / uso autorizado',
+      confidence: extractedUses.length ? 'media' : 'media',
+      evidence: extractedUses.length ? 'Uso detectado en la documentación; conviene revisar la denominación exacta.' : ''
+    });
+
+    const extractedObjectives = extractAuthorizedObjectivesFromText(source, context);
+    addDocumentSuggestion(suggestions, 'allowedObjectives', extractedObjectives, {
+      label: 'Plaga / patógeno u objetivo',
+      confidence: extractedObjectives.length ? 'media' : 'media',
+      evidence: extractedObjectives.length ? 'Objetivo detectado en la documentación; conviene revisar la denominación exacta.' : ''
+    });
+
+    const extractedInterval = tableEvidence?.applicationInterval || extractApplicationIntervalFromText(source);
+    addDocumentSuggestion(suggestions, 'applicationInterval', extractedInterval, {
+      label: 'Intervalo entre aplicaciones',
+      confidence: tableEvidence?.applicationInterval ? tableEvidence.confidence : 'media',
+      evidence: tableEvidence?.applicationInterval ? tableEvidence.evidenceLabel : 'Dato localizado fuera de una fila de cultivo inequívoca.'
+    });
+
+    const extractedStage = tableEvidence?.applicationStage || extractApplicationStageFromText(source);
+    addDocumentSuggestion(suggestions, 'applicationStage', extractedStage, {
+      label: 'Estadio / condiciones de aplicación',
+      confidence: tableEvidence?.applicationStage ? tableEvidence.confidence : 'media',
+      evidence: tableEvidence?.applicationStage ? tableEvidence.evidenceLabel : 'Dato localizado fuera de una fila de cultivo inequívoca.'
+    });
+
+    if (tableEvidence?.doseValue !== null && tableEvidence?.doseValue !== undefined && tableEvidence?.doseUnit) {
+      const doseValueText = formatDocNumber(tableEvidence.doseValue);
+      const doseUnit = tableEvidence.doseUnit;
+      addDocumentSuggestion(suggestions, 'doseReference', `${doseValueText} ${doseUnit}\nÚNICO`, {
+        label: 'Dosis recomendada',
+        confidence: tableEvidence.confidence,
+        evidence: tableEvidence.evidenceLabel
+      });
+      addDocumentSuggestion(suggestions, 'doseRule', {
+        mode: 'fixed',
+        displayUnit: doseUnit,
+        expectedAppliedUnit: doseUnit,
+        value: Number(tableEvidence.doseValue)
+      }, {
+        label: 'Regla de validación de dosis',
+        confidence: tableEvidence.confidence,
+        evidence: tableEvidence.evidenceLabel
+      });
+    } else {
+      const doseFallback = extractDoseEvidenceFromText(text);
+      if (doseFallback?.reference && doseFallback?.rule) {
+        addDocumentSuggestion(suggestions, 'doseReference', doseFallback.reference, {
+          label: 'Dosis recomendada',
+          confidence: 'media',
+          evidence: 'Dato localizado fuera de una fila de cultivo inequívoca.'
+        });
+        addDocumentSuggestion(suggestions, 'doseRule', doseFallback.rule, {
+          label: 'Regla de validación de dosis',
+          confidence: 'media',
+          evidence: 'Requiere revisión antes de aplicar.'
+        });
+      }
+    }
+
+    if (tableEvidence?.volumeMin !== null && tableEvidence?.volumeMin !== undefined && tableEvidence?.volumeMax !== null && tableEvidence?.volumeMax !== undefined) {
+      addDocumentSuggestion(suggestions, 'volumeReference', `Mín. ${formatDocNumber(tableEvidence.volumeMin)} L/ha\nMáx. ${formatDocNumber(tableEvidence.volumeMax)} L/ha`, {
+        label: 'Volumen caldo',
+        confidence: tableEvidence.confidence,
+        evidence: tableEvidence.evidenceLabel
+      });
+      addDocumentSuggestion(suggestions, 'volumeRule', {
+        mode: 'range',
+        unit: 'L/ha',
+        min: Number(tableEvidence.volumeMin),
+        max: Number(tableEvidence.volumeMax)
+      }, {
+        label: 'Regla de validación de volumen',
+        confidence: tableEvidence.confidence,
+        evidence: tableEvidence.evidenceLabel
+      });
+    } else {
+      const volumeFallback = extractVolumeEvidenceFromText(text);
+      if (volumeFallback?.reference && volumeFallback?.rule) {
+        addDocumentSuggestion(suggestions, 'volumeReference', volumeFallback.reference, {
+          label: 'Volumen caldo',
+          confidence: 'media',
+          evidence: 'Dato localizado fuera de una fila de cultivo inequívoca.'
+        });
+        addDocumentSuggestion(suggestions, 'volumeRule', volumeFallback.rule, {
+          label: 'Regla de validación de volumen',
+          confidence: 'media',
+          evidence: 'Requiere revisión antes de aplicar.'
+        });
+      }
+    }
+
+    const safetyPeriod = tableEvidence?.safetyPeriod || extractSafetyPeriodFromText(source);
+    addDocumentSuggestion(suggestions, 'safetyPeriod', safetyPeriod, {
+      label: 'P.S.',
+      confidence: tableEvidence?.safetyPeriod ? tableEvidence.confidence : 'media',
+      evidence: tableEvidence?.safetyPeriod ? tableEvidence.evidenceLabel : 'Dato detectado fuera de una fila de cultivo inequívoca.'
+    });
+
+    const maxApplications = Number.isFinite(tableEvidence?.maxApplications)
+      ? tableEvidence.maxApplications
+      : extractMaxApplicationsFromText(source);
+    if (Number.isFinite(maxApplications)) {
+      addDocumentSuggestion(suggestions, 'maxApplications', Number(maxApplications), {
+        label: 'Máx. aplicaciones campaña',
+        confidence: Number.isFinite(tableEvidence?.maxApplications) ? tableEvidence.confidence : 'media',
+        evidence: Number.isFinite(tableEvidence?.maxApplications) ? tableEvidence.evidenceLabel : 'Dato detectado fuera de una fila de cultivo inequívoca.'
+      });
+    }
+
+    suggestions.pendingLabels = pendingLabelsAfterSuggestions(product, suggestions);
+    return suggestions;
+  }
+
+  function addDocumentSuggestion(suggestions, key, value, meta) {
+    const isEmpty = value === null || value === undefined || value === '';
+    if (isEmpty) return;
+    suggestions[key] = value;
+    suggestions.meta[key] = {
+      label: meta?.label || key,
+      confidence: meta?.confidence === 'alta' ? 'alta' : 'media',
+      evidence: meta?.evidence || ''
+    };
+  }
+
+  function suggestionEntries(suggestions) {
+    return Object.keys(suggestions?.meta || {}).map(key => {
+      const meta = suggestions.meta[key] || {};
+      return {
+        key,
+        label: meta.label || key,
+        confidence: meta.confidence === 'alta' ? 'alta' : 'media',
+        evidence: meta.evidence || '',
+        summary: summarizeSuggestionValue(suggestions[key])
+      };
+    });
+  }
+
+  function summarizeSuggestionValue(value) {
+    if (Array.isArray(value)) return value.join(' · ');
+    if (value && typeof value === 'object') {
+      if (value.mode === 'fixed') return `${formatDocNumber(value.value)} ${value.displayUnit || value.expectedAppliedUnit || value.unit || ''}`.trim();
+      if (value.mode === 'range') return `${formatDocNumber(value.min)}–${formatDocNumber(value.max)} ${value.unit || ''}`.trim();
+      return JSON.stringify(value);
+    }
+    return trimText(String(value ?? ''), 120);
+  }
+
+  function getProductExtractionContext(product) {
+    const rows = state.treatments.filter(row => normalizeComparableText(row.productName) === normalizeComparableText(product.name));
+    const crops = rows.map(row => row.crop || '').filter(Boolean);
+    const objectives = rows.map(row => row.objective || '').filter(Boolean);
+    const prefersVine = crops.some(value => /VID/i.test(value)) || objectives.some(value => /MILDIO\s+DE\s+LA\s+VID/i.test(normalizeExtractionText(value)));
+    return { crops, objectives, prefersVine };
+  }
+
+  function normalizeComparableText(value) {
+    return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().replace(/[^A-Z0-9]+/g, ' ').trim();
+  }
+
+  function normalizeExtractionText(text) {
+    return String(text || '').replace(/\r/g, '\n').replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
+  }
+
+  function extractStructuredUseTableEvidence(text, context) {
+    const normalized = normalizeComparableText(text);
+    if (!normalized) return null;
+    const anchors = context?.prefersVine
+      ? ['MILDIO DE LA VID', 'PLASMOPARA VITICOLA', ' VID ']
+      : [' VID ', 'MILDIO DE LA VID', 'PLASMOPARA VITICOLA'];
+    let segment = '';
+    for (const anchor of anchors) {
+      const idx = normalized.indexOf(anchor.trim());
+      if (idx >= 0) {
+        segment = normalized.slice(Math.max(0, idx - 35), idx + 260);
+        break;
+      }
+    }
+    if (!segment) return null;
+
+    const doseMatch = segment.match(/\b(\d+(?:[.,]\d+)?)\s*(KG|G|L|ML|CC)\s*\/\s*HA\b/i)
+      || segment.match(/\b(0[.,]\d{1,4}|\d+[.,]\d{1,4})\b(?=[\s\S]{0,40}(?:\b\d{1,2}\b|200|300|400|500|1000))/i);
+    const doseValue = doseMatch ? Number(String(doseMatch[1]).replace(',', '.')) : null;
+    const doseUnit = doseMatch?.[2] ? `${String(doseMatch[2]).toLowerCase()}/ha`.replace('ml', 'cc') : 'kg/ha';
+
+    const volumeMatch = segment.match(/\b(\d{2,4})\s*(?:-|–|A)\s*(\d{2,4})\b(?=[\s\S]{0,24}(?:BBCH|\b\d{1,3}\b))/i)
+      || segment.match(/\b(\d{2,4})\s*(?:-|–|A)\s*(\d{2,4})\b/i);
+    const volumeMin = volumeMatch ? Number(volumeMatch[1]) : null;
+    const volumeMax = volumeMatch ? Number(volumeMatch[2]) : null;
+
+    const afterDose = doseMatch ? segment.slice(segment.indexOf(doseMatch[0]) + doseMatch[0].length) : segment;
+    const applicationsMatch = afterDose.match(/\b(\d{1,2})\s*(?:\(|\[|(?:\d{1,2}\s*[-–]\s*\d{1,2})|INTERVALO|\b(?:7|10)\b)/i)
+      || segment.match(/\b(\d{1,2})\s*\(\s*\d{1,2}(?:\s*[-–]\s*\d{1,2})?\s*\)/i);
+    const maxApplications = applicationsMatch ? Number(applicationsMatch[1]) : null;
+    const intervalMatch = afterDose.match(/\b(\d{1,2})\s*[-–]\s*(\d{1,2})\b/);
+    const applicationInterval = intervalMatch ? `${intervalMatch[1]}-${intervalMatch[2]} días` : '';
+    const stageMatch = segment.match(/BBCH\s*([0-9]{1,2}(?:\s*\/\s*[0-9]{1,2})?(?:\s*[-–]\s*[0-9]{1,2})?)/i);
+    const applicationStage = stageMatch ? `BBCH ${stageMatch[1].replace(/\s+/g, '')}` : '';
+
+    let safetyPeriod = '';
+    if (volumeMatch) {
+      const tail = segment.slice(segment.indexOf(volumeMatch[0]) + volumeMatch[0].length);
+      const nums = [...tail.matchAll(/\b(\d{1,3})\b/g)].map(match => Number(match[1])).filter(value => Number.isFinite(value));
+      const candidate = nums.length ? nums[nums.length - 1] : null;
+      if (candidate !== null && candidate >= 1 && candidate <= 120) safetyPeriod = `${candidate} días`;
+    }
+
+    const score = [doseValue !== null, volumeMin !== null && volumeMax !== null, Number.isFinite(maxApplications), Boolean(safetyPeriod)].filter(Boolean).length;
+    if (score < 2) return null;
+    return {
+      doseValue,
+      doseUnit,
+      volumeMin,
+      volumeMax,
+      maxApplications,
+      safetyPeriod,
+      applicationInterval,
+      applicationStage,
+      confidence: score >= 4 ? 'alta' : 'media',
+      evidenceLabel: context?.prefersVine ? 'Fila de vid localizada en la tabla de usos y dosis.' : 'Fila de uso localizada en la tabla técnica.'
+    };
+  }
+
+  function formatDocNumber(value) {
+    const number = Number(value);
+    if (!Number.isFinite(number)) return String(value ?? '');
+    return Number.isInteger(number) ? String(number) : String(number).replace('.', ',');
+  }
+
+  function extractRegistrationFromText(text) {
+    const patterns = [
+      /(?:N[.º°O]?\s*)?(?:N[ÚU]M(?:ERO)?\s*)?(?:DE\s*)?REGISTRO[^A-Z0-9]{0,28}(ES-\d{5}|\d{5})/i,
+      /\bES-\d{5}\b/i
+    ];
+    for (const pattern of patterns) {
+      const match = text.match(pattern);
+      if (match) return (match[1] || match[0]).toUpperCase();
+    }
+    return '';
+  }
+
+  function extractSafetyPeriodFromText(text) {
+    const match = text.match(/(?:PLAZO\s+DE\s+SEGURIDAD|P\.?\s*S\.?)\s*[:\-]?\s*(NO\s+PROCEDE|NO\s+APLICA|\d{1,3}\s*D[ÍI]AS?)/i);
+    if (!match) return '';
+    const value = match[1].replace(/\s+/g, ' ').trim();
+    if (/NO\s+(?:PROCEDE|APLICA)/i.test(value)) return 'NO PROCEDE';
+    return value.replace(/D[ÍI]AS?/i, 'días');
+  }
+
+  function extractMaxApplicationsFromText(text) {
+    const patterns = [
+      /(?:M[ÁA]X(?:IMO)?\.?\s*)?(\d{1,2})\s+(?:APLICACIONES|TRATAMIENTOS)(?:\s+(?:POR|EN)\s+CAMPA[ÑN]A)?/i,
+      /(?:N[ÚU]MERO\s+M[ÁA]XIMO\s+DE\s+)?(?:APLICACIONES|TRATAMIENTOS)\s*(?:[:\-]?\s*)?(\d{1,2})/i
+    ];
+    for (const pattern of patterns) {
+      const match = text.match(pattern);
+      if (match) {
+        const value = Number(match[1]);
+        if (Number.isFinite(value)) return value;
+      }
+    }
+    return null;
+  }
+
+  function extractActiveIngredientsFromText(text) {
+    const lines = String(text || '').split(/\n+/).map(line => line.replace(/\s+/g, ' ').trim()).filter(Boolean);
+    const compositionIndex = lines.findIndex(line => /COMPOSICI[ÓO]N|SUSTANCIA\s+ACTIVA|PRINCIPIOS?\s+ACTIVOS?/i.test(line));
+    const candidates = [];
+    if (compositionIndex >= 0) {
+      candidates.push(lines[compositionIndex].replace(/^.*?(?:COMPOSICI[ÓO]N|SUSTANCIA\s+ACTIVA|PRINCIPIOS?\s+ACTIVOS?)\s*[:\-]?\s*/i, '').trim());
+      candidates.push(lines[compositionIndex + 1] || '');
+    }
+    candidates.push(...lines.filter(line => /\b\d+(?:[.,]\d+)?\s*%\s*(?:P\/P|P\/V)?|\b\d+\s*G\/KG\b/i.test(line)));
+    const best = candidates.map(line => line.trim()).find(line => line && /%|G\/KG|G\/L/i.test(line.toUpperCase()) && !/REACCI[ÓO]N|ATENCI[ÓO]N|PELIGRO|CONTENIDO|UFI/i.test(line));
+    if (!best) return '';
+    const cleanMatch = best.match(/^(.+?\(\s*\d+(?:[.,]\d+)?\s*g\s*\/\s*(?:kg|l)\s*\))/i);
+    return trimText(cleanMatch ? cleanMatch[1] : best, 180);
+  }
+
+  function extractMixRuleFromText(text) {
+    if (/DEBE\s+APLICARSE\s+SOLO|APLICAR(?:SE)?\s+SOLO|NO\s+(?:DEBE\s+)?MEZCLAR(?:SE)?|NO\s+MEZCLAR\s+CON|NO\s+SE\s+USAR[ÁA]\s+EN\s+COMBINACI[ÓO]N\s+CON\s+OTROS\s+PRODUCTOS/i.test(text)) return 'SOLO';
+    return '';
+  }
+
+  function extractDoseEvidenceFromText(text) {
+    const lines = String(text || '').split(/\n+/).map(line => line.replace(/\s+/g, ' ').trim()).filter(Boolean);
+    const selected = lines.filter(line => /DOSIS|KG\/HA|G\/HL|CC\/HL|ML\/HL|L\/HA|%/i.test(line)).slice(0, 2);
+    if (!selected.length) return null;
+    const reference = trimText(selected.join(' · '), 200);
+    const source = reference.replace(/,/g, '.');
+    const fixed = source.match(/(?:DOSIS[^0-9]{0,24})?(\d+(?:\.\d+)?)\s*(KG|G|L|ML|CC)\s*\/\s*HA\b/i);
+    if (fixed && !/(M[ÍI]N|M[ÁA]X|A\s+\d)/i.test(source)) {
+      const unit = `${fixed[2].toLowerCase()}/ha`.replace('ml', 'cc');
+      return { reference, rule: { mode: 'fixed', displayUnit: unit, expectedAppliedUnit: unit, value: Number(fixed[1]) } };
+    }
+    return null;
+  }
+
+  function extractVolumeEvidenceFromText(text) {
+    const lines = String(text || '').split(/\n+/).map(line => line.replace(/\s+/g, ' ').trim()).filter(Boolean);
+    const selected = lines.filter(line => /VOLUMEN|CALDO|L\/HA/i.test(line)).slice(0, 2);
+    if (!selected.length) return null;
+    const reference = trimText(selected.join(' · '), 200);
+    const source = reference.replace(/,/g, '.');
+    const range = source.match(/(\d+(?:\.\d+)?)\s*(?:-|–|A)\s*(\d+(?:\.\d+)?)\s*L\s*\/\s*HA/i);
+    if (range) {
+      return { reference, rule: { mode: 'range', unit: 'L/ha', min: Number(range[1]), max: Number(range[2]) } };
+    }
+    if (/NO\s+CONSTA/i.test(source)) return { reference: 'NO CONSTA', rule: { mode: 'not_listed' } };
+    return null;
+  }
+
+  function extractAuthorizedUsesFromText(text, context) {
+    const normalized = normalizeComparableText(text);
+    const uses = [];
+    if (/\bVID\b|MILDIO DE LA VID|PLASMOPARA VITICOLA/.test(normalized)) uses.push('Vid de vinificación');
+    if (!uses.length && context?.crops?.length) uses.push(...context.crops);
+    return mergeUniqueTextValues([], uses);
+  }
+
+  function extractAuthorizedObjectivesFromText(text, context) {
+    const normalized = normalizeComparableText(text);
+    const objectives = [];
+    if (/MILDIO DE LA VID|PLASMOPARA VITICOLA/.test(normalized)) objectives.push('Mildiu de la vid (Plasmopara viticola)');
+    if (!objectives.length && context?.objectives?.length) objectives.push(...context.objectives);
+    return mergeUniqueTextValues([], objectives);
+  }
+
+  function extractApplicationIntervalFromText(text) {
+    const normalized = normalizeExtractionText(text);
+    const explicit = normalized.match(/INTERVALO[^0-9]{0,20}(\d{1,2})\s*[-–]\s*(\d{1,2})\s*D[IÍ]AS?/i)
+      || normalized.match(/\b(\d{1,2})\s*[-–]\s*(\d{1,2})\s*D[IÍ]AS?\b/i);
+    return explicit ? `${explicit[1]}-${explicit[2]} días` : '';
+  }
+
+  function extractApplicationStageFromText(text) {
+    const normalized = normalizeExtractionText(text);
+    const match = normalized.match(/BBCH\s*([0-9]{1,2}(?:\s*\/\s*[0-9]{1,2})?(?:\s*[-–]\s*[0-9]{1,2})?)/i);
+    return match ? `BBCH ${match[1].replace(/\s+/g, '')}` : '';
+  }
+
+  function applyDocumentSuggestionsToProduct(product, suggestions, selectedKeys = null) {
+    return applyDocumentReviewValuesToProduct(product, suggestions || {}, selectedKeys);
+  }
+
+  function applyDocumentReviewValuesToProduct(product, values, selectedKeys = null) {
+    ensureProductDocumentShape(product);
+    const applied = [];
+    const selected = Array.isArray(selectedKeys) ? new Set(selectedKeys) : null;
+    const canApply = key => !selected || selected.has(key);
+    const applyText = (key, value, label) => {
+      if (!canApply(key) || value === null || value === undefined || value === '') return;
+      if (!product[key] || containsPending(product[key]) || key === 'applicationInterval' || key === 'applicationStage') {
+        product[key] = value;
+        applied.push(label);
+      }
+    };
+    applyText('registration', values.registration, 'N.º de registro');
+    applyText('doseReference', values.doseReference, 'Dosis recomendada');
+    applyText('volumeReference', values.volumeReference, 'Volumen caldo');
+    applyText('safetyPeriod', values.safetyPeriod, 'P.S.');
+    applyText('activeIngredients', values.activeIngredients, 'Principios activos');
+    applyText('mixRule', values.mixRule, 'MEZCLA');
+    applyText('applicationInterval', values.applicationInterval, 'Intervalo entre aplicaciones');
+    applyText('applicationStage', values.applicationStage, 'Estadio / condiciones de aplicación');
+    if (canApply('maxApplications') && (product.maxApplications === null || product.maxApplications === undefined || containsPending(product.maxApplications)) && (Number.isFinite(values.maxApplications) || values.maxApplications === null)) {
+      product.maxApplications = values.maxApplications;
+      applied.push('Máx. aplicaciones campaña');
+    }
+    if (canApply('doseRule') && (!product.doseRule || product.doseRule.mode === 'pending') && values.doseRule && values.doseRule.mode && values.doseRule.mode !== 'pending') {
+      product.doseRule = values.doseRule;
+      applied.push('Regla de validación de dosis');
+    }
+    if (canApply('volumeRule') && (!product.volumeRule || product.volumeRule.mode === 'pending') && values.volumeRule && values.volumeRule.mode && values.volumeRule.mode !== 'pending') {
+      product.volumeRule = values.volumeRule;
+      applied.push('Regla de validación de volumen');
+    }
+    if (canApply('allowedUses') && Array.isArray(values.allowedUses) && values.allowedUses.length) {
+      product.allowedUses = mergeUniqueTextValues(product.allowedUses, values.allowedUses);
+      applied.push('Cultivo / uso autorizado');
+    }
+    if (canApply('allowedObjectives') && Array.isArray(values.allowedObjectives) && values.allowedObjectives.length) {
+      product.allowedObjectives = mergeUniqueTextValues(product.allowedObjectives, values.allowedObjectives);
+      applied.push('Plaga / patógeno u objetivo');
+    }
+    product.verificationStatus = productHasTechnicalPending(product) ? 'PENDING' : product.verificationStatus;
+    product.updatedAt = new Date().toISOString();
+    return applied;
+  }
+
+  function renderDocumentReviewFieldCard(product, suggestions, field) {
+    const suggestion = suggestions?.[field.key];
+    const meta = suggestions?.meta?.[field.key] || {};
+    const hasSuggestion = suggestion !== null && suggestion !== undefined && suggestion !== '' && !(Array.isArray(suggestion) && !suggestion.length);
+    const confidence = hasSuggestion ? (meta.confidence === 'alta' ? 'alta' : 'media') : 'none';
+    const confidenceLabel = confidence === 'alta' ? 'Confianza alta' : confidence === 'media' ? 'Revisar' : 'No detectado';
+    const confidenceClass = confidence === 'alta' ? 'ok' : confidence === 'media' ? 'warn' : 'pending';
+    const summary = hasSuggestion ? summarizeSuggestionValue(suggestion) : 'Sin propuesta automática.';
+    const checked = confidence === 'alta' ? 'checked' : '';
+    const requiredTag = field.required ? '<span class="tag pending">Campo técnico</span>' : '<span class="tag">Informativo</span>';
+    return `
+      <article class="document-review-card ${confidence === 'alta' ? 'high' : confidence === 'media' ? 'medium' : 'empty'}">
+        <div class="document-review-top">
+          <label class="document-review-accept">
+            <input type="checkbox" data-review-accept="${escapeAttr(field.key)}" ${checked}>
+            <span>${escapeHtml(field.label)}</span>
+          </label>
+          <div class="document-review-tags">${requiredTag}<span class="tag ${confidenceClass}">${confidenceLabel}</span></div>
+        </div>
+        <div class="document-review-extracted">
+          <strong>Propuesta automática</strong>
+          <p>${escapeHtml(summary)}</p>
+          ${meta.evidence ? `<small>Evidencia: ${escapeHtml(meta.evidence)}</small>` : '<small>Sin evidencia suficiente para proponer un valor.</small>'}
+        </div>
+        <div class="document-review-manual">
+          <strong>Corrección / entrada manual</strong>
+          <p class="muted">Si escribes aquí y marcas el recuadro azul, se aplicará tu valor manual en lugar de la propuesta.</p>
+          ${renderDocumentReviewManualEditor(product, suggestions, field)}
+        </div>
+      </article>
+    `;
+  }
+
+  function renderDocumentReviewManualEditor(product, suggestions, field) {
+    const suggestion = suggestions?.[field.key];
+    switch (field.kind) {
+      case 'textarea':
+        return `<textarea data-review-manual="${escapeAttr(field.key)}" placeholder="Escribe el valor correcto o deja vacío para usar la propuesta automática."></textarea>`;
+      case 'volumeReferenceStructured':
+        return renderDocumentReviewVolumeReferenceEditor(suggestion);
+      case 'lines':
+        return `<textarea data-review-manual="${escapeAttr(field.key)}" placeholder="Uno por línea. Ej.: Vid de vinificación"></textarea>`;
+      case 'mix':
+        return `<select data-review-manual="${escapeAttr(field.key)}">${renderSimpleOptions([
+          ['', 'Usar propuesta automática / no cambiar'],
+          ['A verificar', 'A verificar'],
+          ['----', 'Sin obligación de SOLO'],
+          ['SOLO', 'SOLO']
+        ], '')}</select>`;
+      case 'integerOrNoConsta':
+        return `<input data-review-manual="${escapeAttr(field.key)}" inputmode="numeric" placeholder="Número o NO CONSTA">`;
+      case 'doseRule':
+        return renderDocumentReviewDoseRuleEditor(suggestion);
+      case 'volumeRule':
+        return renderDocumentReviewVolumeRuleEditor(suggestion);
+      case 'text':
+      default:
+        return `<input data-review-manual="${escapeAttr(field.key)}" placeholder="Escribe el valor correcto o deja vacío para usar la propuesta automática.">`;
+    }
+  }
+
+  function renderDocumentReviewDoseRuleEditor(suggestion) {
+    return `
+      <div class="review-rule-editor" data-review-rule="doseRule">
+        <div class="field"><span>Tipo de regla de dosis</span><select data-review-rule-field="doseRule.mode">${renderSimpleOptions([
+          ['', 'Usar propuesta automática / no cambiar'],
+          ['pending', 'A verificar'],
+          ['fixed', 'Dosis única por ha'],
+          ['concentration_range_with_ha_limit', 'Rango % + límite por ha'],
+          ['concentration_hl_range_with_ha_limit', 'Rango g/hL o cc/hL + límite por ha'],
+          ['concentration_fixed_with_ha_limit', 'Concentración % única + límite por ha'],
+          ['concentration_hl_range', 'Rango g/hL o cc/hL sin límite por ha']
+        ], '')}</select></div>
+        <div class="inline-fields two">
+          <div class="field"><span>Unidad visible</span><input data-review-rule-field="doseRule.displayUnit" placeholder="kg/ha, %, g/hL, cc/hL"></div>
+          <div class="field"><span>Unidad aplicada esperada</span><input data-review-rule-field="doseRule.expectedAppliedUnit" placeholder="kg/ha, cc/ha, g/hL"></div>
+        </div>
+        <div class="inline-fields two">
+          <div class="field"><span>Valor único</span><input data-review-rule-field="doseRule.value" inputmode="decimal" placeholder="Solo si es dosis única"></div>
+          <div class="field"><span>Mínimo</span><input data-review-rule-field="doseRule.min" inputmode="decimal" placeholder="Solo si hay rango"></div>
+        </div>
+        <div class="inline-fields two">
+          <div class="field"><span>Máximo</span><input data-review-rule-field="doseRule.max" inputmode="decimal" placeholder="Solo si hay rango"></div>
+          <div class="field"><span>Límite por ha</span><input data-review-rule-field="doseRule.perHaLimit" inputmode="decimal" placeholder="Si consta"></div>
+        </div>
+        <div class="field"><span>Unidad límite por ha</span><input data-review-rule-field="doseRule.perHaLimitUnit" placeholder="kg/ha o L/ha"></div>
+      </div>
+    `;
+  }
+
+  function renderDocumentReviewVolumeReferenceEditor(suggestion) {
+    return `
+      <div class="review-volume-editor" data-review-volume-editor="volumeReference">
+        <div class="field"><span>Formato de volumen caldo</span><select data-review-volume-field="volumeReference.mode">${renderSimpleOptions([
+          ['', 'Usar propuesta automática / no cambiar'],
+          ['fixed', 'Volumen único'],
+          ['range', 'Volumen mínimo y máximo'],
+          ['not_listed', 'No consta en documentación']
+        ], '')}</select></div>
+        <p class="muted compact-note">Unidad fija: <strong>L/ha</strong>. La regla de validación de volumen se generará automáticamente a partir de esta selección; no tendrás que introducirla de nuevo.</p>
+        <div class="hidden" data-review-volume-panel="volumeReference.fixed">
+          <div class="field"><span>Volumen único</span><input data-review-volume-field="volumeReference.value" inputmode="decimal" placeholder="L/ha"></div>
+        </div>
+        <div class="hidden" data-review-volume-panel="volumeReference.range">
+          <div class="inline-fields two">
+            <div class="field"><span>Volumen mínimo</span><input data-review-volume-field="volumeReference.min" inputmode="decimal" placeholder="L/ha"></div>
+            <div class="field"><span>Volumen máximo</span><input data-review-volume-field="volumeReference.max" inputmode="decimal" placeholder="L/ha"></div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderDocumentReviewVolumeRuleEditor(suggestion) {
+    return `
+      <div class="review-rule-editor" data-review-rule="volumeRule">
+        <div class="field"><span>Tipo de regla de volumen</span><select data-review-rule-field="volumeRule.mode">${renderSimpleOptions([
+          ['', 'Usar propuesta automática / no cambiar'],
+          ['pending', 'A verificar'],
+          ['fixed', 'Volumen único'],
+          ['range', 'Volumen mínimo y máximo'],
+          ['not_listed', 'No consta en documentación']
+        ], '')}</select></div>
+        <p class="muted compact-note">Unidad fija: <strong>L/ha</strong>.</p>
+        <div class="hidden" data-review-volume-rule-panel="volumeRule.fixed">
+          <div class="field"><span>Volumen único</span><input data-review-rule-field="volumeRule.value" inputmode="decimal" placeholder="L/ha"></div>
+        </div>
+        <div class="hidden" data-review-volume-rule-panel="volumeRule.range">
+          <div class="inline-fields two">
+            <div class="field"><span>Volumen mínimo</span><input data-review-rule-field="volumeRule.min" inputmode="decimal" placeholder="L/ha"></div>
+            <div class="field"><span>Volumen máximo</span><input data-review-rule-field="volumeRule.max" inputmode="decimal" placeholder="L/ha"></div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  function syncReviewVolumeReferencePanels(container, mode) {
+    if (!container) return;
+    container.querySelector('[data-review-volume-panel="volumeReference.fixed"]')?.classList.toggle('hidden', mode !== 'fixed');
+    container.querySelector('[data-review-volume-panel="volumeReference.range"]')?.classList.toggle('hidden', mode !== 'range');
+  }
+
+  function syncReviewVolumeRulePanels(container, mode) {
+    if (!container) return;
+    container.querySelector('[data-review-volume-rule-panel="volumeRule.fixed"]')?.classList.toggle('hidden', mode !== 'fixed');
+    container.querySelector('[data-review-volume-rule-panel="volumeRule.range"]')?.classList.toggle('hidden', mode !== 'range');
+  }
+
+  function syncEditProductVolumePanels(mode) {
+    document.getElementById('editVolumeFixedPanel')?.classList.toggle('hidden', mode !== 'fixed');
+    document.getElementById('editVolumeRangePanel')?.classList.toggle('hidden', mode !== 'range');
+  }
+
+  function collectDocumentReviewPayload(product, suggestions) {
+    const values = {};
+    const selectedKeys = [];
+    let derivedVolumeRule = null;
+    for (const field of DOCUMENT_REVIEW_FIELDS) {
+      const accept = document.querySelector(`[data-review-accept="${cssEscapeValue(field.key)}"]`);
+      if (!accept?.checked) continue;
+      selectedKeys.push(field.key);
+      const manualValue = readDocumentReviewManualValue(field);
+      values[field.key] = manualValue.hasManual ? manualValue.value : suggestions?.[field.key];
+      if (field.key === 'volumeReference') {
+        if (manualValue.hasManual && manualValue.derivedVolumeRule) {
+          derivedVolumeRule = manualValue.derivedVolumeRule;
+        } else if (!manualValue.hasManual && suggestions?.volumeRule) {
+          derivedVolumeRule = suggestions.volumeRule;
+        }
+      }
+    }
+    if (derivedVolumeRule && !selectedKeys.includes('volumeRule')) {
+      values.volumeRule = derivedVolumeRule;
+      selectedKeys.push('volumeRule');
+    }
+    return { values, selectedKeys };
+  }
+
+  function validateDocumentReviewPayload(payload) {
+    const errors = [];
+    for (const key of payload.selectedKeys) {
+      const value = payload.values[key];
+      if (value === undefined || value === '' || (Array.isArray(value) && !value.length)) {
+        errors.push(`El campo marcado “${labelReviewField(key)}” no tiene valor automático ni manual.`);
+      }
+      if (key === 'maxApplications' && value !== null && !Number.isFinite(value)) {
+        errors.push('Máx. aplicaciones debe ser un número o NO CONSTA.');
+      }
+      if (key === 'doseRule' && value && value.mode && value.mode !== 'pending') {
+        errors.push(...validateDoseRulePayload(value));
+      }
+      if (key === 'volumeRule' && value && value.mode && value.mode !== 'pending') {
+        errors.push(...validateVolumeRulePayload(value));
+      }
+    }
+    return errors;
+  }
+
+  function labelReviewField(key) {
+    return DOCUMENT_REVIEW_FIELDS.find(field => field.key === key)?.label || key;
+  }
+
+  function readDocumentReviewManualValue(field) {
+    if (field.kind === 'doseRule') {
+      const mode = readReviewRuleField('doseRule.mode');
+      if (!mode) return { hasManual: false, value: null };
+      return {
+        hasManual: true,
+        value: buildDoseRuleFromEdit({
+          mode,
+          displayUnit: readReviewRuleField('doseRule.displayUnit'),
+          expectedAppliedUnit: readReviewRuleField('doseRule.expectedAppliedUnit'),
+          value: readReviewRuleNumeric('doseRule.value'),
+          min: readReviewRuleNumeric('doseRule.min'),
+          max: readReviewRuleNumeric('doseRule.max'),
+          perHaLimit: readReviewRuleNumeric('doseRule.perHaLimit'),
+          perHaLimitUnit: readReviewRuleField('doseRule.perHaLimitUnit')
+        })
+      };
+    }
+    if (field.kind === 'volumeReferenceStructured') {
+      const mode = readReviewVolumeField('volumeReference.mode');
+      if (!mode) return { hasManual: false, value: null };
+      if (mode === 'not_listed') {
+        return { hasManual: true, value: 'NO CONSTA', derivedVolumeRule: { mode: 'not_listed' } };
+      }
+      if (mode === 'fixed') {
+        const value = readReviewVolumeNumeric('volumeReference.value');
+        return {
+          hasManual: true,
+          value: Number.isFinite(value) ? `${formatDocNumber(value)} L/ha\nÚNICO` : '',
+          derivedVolumeRule: buildVolumeRuleFromEdit({ mode, value })
+        };
+      }
+      if (mode === 'range') {
+        const min = readReviewVolumeNumeric('volumeReference.min');
+        const max = readReviewVolumeNumeric('volumeReference.max');
+        return {
+          hasManual: true,
+          value: Number.isFinite(min) && Number.isFinite(max) ? `Mín. ${formatDocNumber(min)} L/ha\nMáx. ${formatDocNumber(max)} L/ha` : '',
+          derivedVolumeRule: buildVolumeRuleFromEdit({ mode, min, max })
+        };
+      }
+      return { hasManual: true, value: 'A verificar', derivedVolumeRule: { mode: 'pending' } };
+    }
+    if (field.kind === 'volumeRule') {
+      const mode = readReviewRuleField('volumeRule.mode');
+      if (!mode) return { hasManual: false, value: null };
+      return {
+        hasManual: true,
+        value: buildVolumeRuleFromEdit({
+          mode,
+          value: readReviewRuleNumeric('volumeRule.value'),
+          min: readReviewRuleNumeric('volumeRule.min'),
+          max: readReviewRuleNumeric('volumeRule.max')
+        })
+      };
+    }
+    const input = document.querySelector(`[data-review-manual="${cssEscapeValue(field.key)}"]`);
+    const raw = input?.value?.trim() ?? '';
+    if (!raw) return { hasManual: false, value: null };
+    if (field.kind === 'lines') return { hasManual: true, value: parseLinesInput(raw) };
+    if (field.kind === 'integerOrNoConsta') {
+      const parsed = parseMaxApplicationsEdit(raw);
+      return { hasManual: true, value: parsed === 'INVALID' ? raw : parsed };
+    }
+    return { hasManual: true, value: raw };
+  }
+
+  function readReviewRuleField(key) {
+    return document.querySelector(`[data-review-rule-field="${cssEscapeValue(key)}"]`)?.value?.trim() ?? '';
+  }
+
+  function readReviewRuleNumeric(key) {
+    const raw = readReviewRuleField(key);
+    if (!raw) return null;
+    const value = Number(normalizeNumericString(raw));
+    return Number.isFinite(value) ? value : null;
+  }
+
+  function readReviewVolumeField(key) {
+    return document.querySelector(`[data-review-volume-field="${cssEscapeValue(key)}"]`)?.value?.trim() ?? '';
+  }
+
+  function readReviewVolumeNumeric(key) {
+    const raw = readReviewVolumeField(key);
+    if (!raw) return null;
+    const value = Number(normalizeNumericString(raw));
+    return Number.isFinite(value) ? value : null;
+  }
+
+  function cssEscapeValue(value) {
+    return String(value || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  }
+
+  function parseLinesInput(value) {
+    return String(value || '')
+      .split(/\n|;|,/)
+      .map(item => item.trim())
+      .filter(Boolean);
+  }
+
+  function mergeUniqueTextValues(current, additions) {
+    const map = new Map();
+    [...(Array.isArray(current) ? current : []), ...(Array.isArray(additions) ? additions : [])].forEach(item => {
+      const text = String(item || '').trim();
+      if (!text) return;
+      const key = normalizeComparableText(text);
+      if (!map.has(key)) map.set(key, text);
+    });
+    return Array.from(map.values());
+  }
+
+  function renderInlineList(values, fallback = '—') {
+    const list = Array.isArray(values) ? values.filter(Boolean) : [];
+    return list.length ? list.join(' · ') : fallback;
+  }
+
+  function pendingLabelsForProduct(product) {
+    const labels = [];
+    if (!product.registration || containsPending(product.registration)) labels.push('N.º de registro');
+    if (!product.doseReference || containsPending(product.doseReference)) labels.push('Dosis recomendada');
+    if (!product.doseRule || product.doseRule.mode === 'pending') labels.push('Regla de dosis');
+    if (!product.volumeReference || containsPending(product.volumeReference)) labels.push('Volumen caldo');
+    if (!product.volumeRule || product.volumeRule.mode === 'pending') labels.push('Regla de volumen');
+    if (!product.safetyPeriod || containsPending(product.safetyPeriod)) labels.push('P.S.');
+    if (product.maxApplications === null || product.maxApplications === undefined || containsPending(product.maxApplications)) labels.push('Máx. aplicaciones campaña');
+    if (!product.activeIngredients || containsPending(product.activeIngredients)) labels.push('Principios activos');
+    if (!product.mixRule || containsPending(product.mixRule)) labels.push('MEZCLA');
+    return labels;
+  }
+
+  function pendingLabelsAfterSuggestions(product, suggestions) {
+    const simulated = deepClone(product);
+    const confidentKeys = suggestionEntries(suggestions).filter(entry => entry.confidence === 'alta').map(entry => entry.key);
+    applyDocumentSuggestionsToProduct(simulated, suggestions, confidentKeys);
+    return pendingLabelsForProduct(simulated);
+  }
+
+  function trimText(value, limit) {
+    const text = String(value || '').replace(/\s+/g, ' ').trim();
+    return text.length > limit ? `${text.slice(0, Math.max(0, limit - 1))}…` : text;
+  }
+
+  function formatBytes(bytes) {
+    const value = Number(bytes) || 0;
+    if (value < 1024) return `${value} B`;
+    if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+    return `${(value / (1024 * 1024)).toFixed(1)} MB`;
+  }
+
+  function renderSimpleOptions(options, selected) {
+    return options.map(([value, label]) => `<option value="${escapeAttr(value)}" ${String(selected) === String(value) ? 'selected' : ''}>${escapeHtml(label)}</option>`).join('');
+  }
+
+  function readNumericEdit(id) {
+    const raw = document.getElementById(id)?.value?.trim() ?? '';
+    if (!raw) return null;
+    const value = Number(raw.replace(',', '.'));
+    return Number.isFinite(value) ? value : NaN;
+  }
+
+  function ruleInputValue(value) {
+    return value === null || value === undefined || value === '' ? '' : String(value);
+  }
+
+  function maxApplicationsInput(value) {
+    return value === null || value === undefined || value === '' ? 'NO CONSTA' : String(value);
+  }
+
+  function parseMaxApplicationsEdit(raw) {
+    const text = String(raw || '').trim();
+    if (!text || /no consta/i.test(text)) return null;
+    const value = Number(text.replace(',', '.'));
+    return Number.isFinite(value) && value >= 0 ? value : 'INVALID';
+  }
+
+  function verifiedDateInput(value) {
+    if (!value) return '';
+    return String(value).slice(0, 10);
+  }
+
+  async function saveCampaignApplicator() {
+    const input = document.getElementById('campaignApplicator');
+    const value = input?.value?.trim() || '';
+    const campaign = activeCampaign();
+    if (!campaign) return;
+    campaign.applicator = value;
+    campaign.updatedAt = new Date().toISOString();
+    await saveState();
+    toast('Aplicador guardado.');
+    render();
+  }
+
+  function runSelfCheck() {
+    const checks = [];
+    checks.push(['Estado local accesible', Boolean(state)]);
+    checks.push(['Campaña activa definida', Boolean(activeCampaign())]);
+    checks.push(['Esquema versionado', state.schemaVersion === SCHEMA_VERSION]);
+    checks.push(['Navegación principal preparada', document.querySelectorAll('.nav-item').length === 5]);
+    checks.push(['Columnas oficiales = 15', OFFICIAL_COLUMNS.length === 15]);
+    checks.push(['Alertas activas computables', Array.isArray(activeAlerts())]);
+    checks.push(['Borradores computables', Array.isArray(currentDrafts())]);
+    const rows = checks.map(([label, ok]) => `<li><span class="tag ${ok ? 'ok' : 'warn'}">${ok ? 'OK' : 'REVISAR'}</span> ${escapeHtml(label)}</li>`).join('');
+    showInfoModal('Autocomprobación', `<ul class="list-clean">${rows}</ul>`);
+  }
+
+  async function exportCsv() {
+    const rows = filteredLedgerTreatments();
+    const ordinals = ordinalMapForRows(activeTreatments());
+    const lines = [OFFICIAL_COLUMNS.map(([, label]) => csvEscape(label)).join(';')];
+    rows.forEach(row => {
+      const values = officialValues(row, ordinals);
+      lines.push(OFFICIAL_COLUMNS.map(([key]) => csvEscape(String(values[key] ?? ''))).join(';'));
+    });
+    downloadText(`cuaderno_tratamientos_${dateStamp()}.csv`, lines.join('\n'), 'text/csv;charset=utf-8');
+    registerExport('CSV');
+  }
+
+  async function exportXls() {
+    const rows = filteredLedgerTreatments();
+    const ordinals = ordinalMapForRows(activeTreatments());
+    const html = `<!doctype html><html><head><meta charset="utf-8"></head><body><table border="1"><tr>${OFFICIAL_COLUMNS.map(([, label]) => `<th>${escapeHtml(label)}</th>`).join('')}</tr>${rows.map(row => { const values = officialValues(row, ordinals); return `<tr>${OFFICIAL_COLUMNS.map(([key]) => `<td>${escapeHtml(String(values[key] ?? ''))}</td>`).join('')}</tr>`; }).join('')}</table></body></html>`;
+    downloadText(`cuaderno_tratamientos_${dateStamp()}.xls`, html, 'application/vnd.ms-excel;charset=utf-8');
+    registerExport('XLS');
+  }
+
+  function exportOfficialPdf() {
+    const rows = filteredLedgerTreatments();
+    openPrintWindow('PDF oficial', buildStandalonePrintHtml('CUADERNO DE TRATAMIENTOS', buildPdfSheet(rows), true));
+    registerExport('PDF oficial');
+  }
+
+  function exportCompactPdf() {
+    const groups = groupTreatmentsByDate(filteredLedgerTreatments());
+    const content = groups.map(group => `<h2>N.º ${group.ordinal} · ${formatDate(group.date)}</h2><ul>${group.rows.map(row => `<li><strong>${escapeHtml(row.productName)}</strong> — ${escapeHtml(row.doseApplied || '—')} — ${escapeHtml(row.objective || '—')}</li>`).join('')}</ul>`).join('');
+    openPrintWindow('PDF compacto', buildStandalonePrintHtml('RESUMEN COMPACTO DE TRATAMIENTOS', content, false));
+    registerExport('PDF compacto');
+  }
+
+  function openPrintWindow(title, html) {
+    const win = window.open('', '_blank');
+    if (!win) {
+      toast('El navegador bloqueó la ventana de impresión. Permite ventanas emergentes.');
+      return;
+    }
+    win.document.open();
+    win.document.write(html);
+    win.document.close();
+    win.focus();
+    setTimeout(() => win.print(), 350);
+  }
+
+  function buildStandalonePrintHtml(title, body, official) {
+    return `<!doctype html><html lang="es"><head><meta charset="utf-8"><title>${escapeHtml(title)}</title><style>
+      @page { size: ${official ? 'A4 landscape' : 'A4 portrait'}; margin: 8mm; }
+      body { font-family: Arial, sans-serif; color:#111827; }
+      .pdf-title { text-align:center; font-size:16px; font-weight:700; margin-bottom:8px; }
+      .pdf-applicator { font-size:11px; font-weight:700; text-decoration:underline; margin-bottom:8px; }
+      table { width:100%; border-collapse:collapse; table-layout:fixed; }
+      th, td { border:1px solid #9fb3bf; padding:3px; font-size:7px; white-space:pre-line; word-break:break-word; text-align:center; vertical-align:top; }
+      th { background:#155e75; color:#fff; }
+      td.warning-cell { background:#fde8e8; color:#7d1d1d; font-weight:700; }
+      h1 { text-align:center; font-size:18px; }
+      h2 { font-size:14px; border-bottom:1px solid #cbd5e1; padding-bottom:4px; }
+      li { margin-bottom:6px; }
+      .caption { font-size:9px; color:#475569; }
+      .scroll-table { overflow:visible; }
+    </style></head><body><h1>${escapeHtml(title)}</h1>${body}</body></html>`;
+  }
+
+  async function registerExport(kind) {
+    state.history.exports.push({ kind, at: new Date().toISOString() });
+    await saveState();
+  }
+
+  function csvEscape(value) {
+    const text = String(value ?? '');
+    if (/[;"\n]/.test(text)) return `"${text.replace(/"/g, '""')}"`;
+    return text;
+  }
+
+  function downloadText(filename, content, mime) {
+    const blob = new Blob([content], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    toast(`Archivo descargado: ${filename}`);
+  }
+
+  function downloadBackup() {
+    const payload = {
+      type: 'cuaderno-tratamientos-backup',
+      formatVersion: SCHEMA_VERSION,
+      appVersion: APP_VERSION,
+      exportedAt: new Date().toISOString(),
+      state
+    };
+    downloadText(`copia_cuaderno_tratamientos_${dateStamp()}.json`, JSON.stringify(payload, null, 2), 'application/json;charset=utf-8');
+  }
+
+  async function readRestoreFile(file) {
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const payload = JSON.parse(text);
+      if (payload.type !== 'cuaderno-tratamientos-backup' || !payload.state) throw new Error('Copia no reconocida.');
+      const mode = await choiceDialog('Restaurar copia', 'Elige el modo de restauración.', [
+        { id: 'replace', label: 'Sustituir datos locales', className: 'primary-btn' },
+        { id: 'merge', label: 'Fusionar con revisión de conflictos', className: 'secondary-btn' },
+        { id: 'cancel', label: 'Cancelar', className: 'ghost-btn' }
+      ]);
+      if (!mode || mode === 'cancel') return;
+      if (mode === 'replace') {
+        const ok = await confirmDialog('Sustituir datos', 'Se reemplazará todo el estado local por la copia seleccionada.', 'Sustituir', 'Cancelar');
+        if (!ok) return;
+        state = payload.state;
+        ensureStateShape();
+        state.history.restores.push({ mode, at: new Date().toISOString(), fileName: file.name });
+        await saveState();
+        toast('Copia restaurada por sustitución.');
+        render();
+        return;
+      }
+      await mergeBackupState(payload.state, file.name);
+    } catch (error) {
+      console.error(error);
+      showInfoModal('Restauración no realizada', `<p>${escapeHtml(error.message || 'No se pudo leer la copia.')}</p>`);
+    }
+  }
+
+  async function mergeBackupState(incoming, fileName) {
+    ensureStateShape();
+    const clone = deepClone(incoming);
+    clone.campaigns ||= [];
+    clone.products ||= [];
+    clone.treatments ||= [];
+    clone.alerts ||= [];
+    for (const campaign of clone.campaigns) upsertWithConflict(state.campaigns, campaign, 'campaña', false);
+    for (const product of clone.products) await upsertWithConflict(state.products, product, 'producto', true);
+    for (const treatment of clone.treatments) await upsertWithConflict(state.treatments, treatment, 'tratamiento', true);
+    for (const alert of clone.alerts) await upsertWithConflict(state.alerts, alert, 'alerta', true);
+    state.history.restores.push({ mode: 'merge', at: new Date().toISOString(), fileName });
+    await saveState();
+    toast('Copia fusionada.');
+    render();
+  }
+
+  async function upsertWithConflict(target, item, label, ask) {
+    if (!item?.id) return;
+    const idx = target.findIndex(existing => existing.id === item.id);
+    if (idx < 0) {
+      target.push(item);
+      return;
+    }
+    if (!ask) return;
+    const decision = await choiceDialog(
+      `Conflicto de ${label}`,
+      `Ya existe un elemento con ID coincidente. Decide para <strong>${escapeHtml(item.name || item.title || item.productName || item.id)}</strong>.`,
+      [
+        { id: 'keep', label: 'Mantener local', className: 'ghost-btn' },
+        { id: 'replace', label: 'Sobrescribir con copia', className: 'primary-btn' }
+      ]
+    );
+    if (decision === 'replace') target[idx] = item;
+  }
+
+  async function readImportFile(file) {
+    if (!file) return;
+    try {
+      const lower = file.name.toLowerCase();
+      if (lower.endsWith('.json')) {
+        const data = JSON.parse(await file.text());
+        if (data.type !== 'cuaderno-tratamientos-import') throw new Error('JSON no reconocido como carga estructurada.');
+        ui.importPreview = { kind: 'structured', data };
+        render();
+        return;
+      }
+      if (lower.endsWith('.csv')) {
+        const table = parseCsv(await file.text());
+        ui.importPreview = buildTabularPreview(table.headers, table.rows);
+        render();
+        return;
+      }
+      if (lower.endsWith('.xls')) {
+        const table = parseHtmlTable(await file.text());
+        ui.importPreview = buildTabularPreview(table.headers, table.rows);
+        render();
+        return;
+      }
+      if (lower.endsWith('.xlsx')) {
+        throw new Error('La V1 importa CSV, JSON y XLS compatible. Para .xlsx, guarda como CSV o XLS compatible antes de importar.');
+      }
+      throw new Error('Formato no soportado.');
+    } catch (error) {
+      console.error(error);
+      showInfoModal('Importación no preparada', `<p>${escapeHtml(error.message || 'No se pudo leer el archivo.')}</p>`);
+    }
+  }
+
+  function buildTabularPreview(headers, rows) {
+    const mapping = {};
+    IMPORT_KEYS.forEach(([key, label]) => {
+      const exact = headers.find(header => normalizeText(header) === normalizeText(label));
+      if (exact) mapping[key] = exact;
+    });
+    return { kind: 'tabular', headers, rows, mapping };
+  }
+
+  function parseCsv(text) {
+    const rows = [];
+    let row = [];
+    let cell = '';
+    let quoted = false;
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      const next = text[i + 1];
+      if (ch === '"' && quoted && next === '"') { cell += '"'; i++; continue; }
+      if (ch === '"') { quoted = !quoted; continue; }
+      if ((ch === ';' || ch === ',') && !quoted) { row.push(cell.trim()); cell = ''; continue; }
+      if ((ch === '\n' || ch === '\r') && !quoted) {
+        if (ch === '\r' && next === '\n') i++;
+        row.push(cell.trim()); cell = '';
+        if (row.some(Boolean)) rows.push(row);
+        row = [];
+        continue;
+      }
+      cell += ch;
+    }
+    row.push(cell.trim());
+    if (row.some(Boolean)) rows.push(row);
+    const headers = rows.shift() || [];
+    return { headers, rows: rows.map(values => Object.fromEntries(headers.map((header, idx) => [header, values[idx] || '']))) };
+  }
+
+  function parseHtmlTable(text) {
+    const doc = new DOMParser().parseFromString(text, 'text/html');
+    const table = doc.querySelector('table');
+    if (!table) throw new Error('El XLS compatible no contiene una tabla legible.');
+    const rows = Array.from(table.querySelectorAll('tr')).map(tr => Array.from(tr.querySelectorAll('th,td')).map(td => td.textContent.trim()));
+    const headers = rows.shift() || [];
+    return { headers, rows: rows.map(values => Object.fromEntries(headers.map((header, idx) => [header, values[idx] || '']))) };
+  }
+
+  function buildPreviewTable(headers, rows) {
+    return `<table><thead><tr>${headers.map(h => `<th>${escapeHtml(h)}</th>`).join('')}</tr></thead><tbody>${rows.map(row => `<tr>${headers.map(h => `<td>${escapeHtml(row[h] || '')}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+  }
+
+  async function applyStructuredImport(mode) {
+    const data = ui.importPreview?.data;
+    if (!data) return;
+    const ok = await confirmDialog('Aplicar carga estructurada', `Modo seleccionado: ${mode === 'replace' ? 'sustituir' : 'fusionar'}.`, 'Aplicar', 'Cancelar');
+    if (!ok) return;
+    if (mode === 'replace') {
+      const replacement = defaultState();
+      replacement.activeCampaignId = data.campaign?.id || EMPTY_CAMPAIGN_ID;
+      replacement.campaigns = data.campaign ? [data.campaign] : replacement.campaigns;
+      replacement.products = deepClone(data.products || []);
+      replacement.treatments = deepClone(data.treatments || []);
+      replacement.alerts = deepClone(data.alerts || []);
+      replacement.history.imports.push({ mode, at: new Date().toISOString(), source: data.sourceDocument || 'JSON estructurado' });
+      state = replacement;
+      ensureStateShape();
+    } else {
+      if (data.campaign && !state.campaigns.some(c => c.id === data.campaign.id)) state.campaigns.push(data.campaign);
+      mergeById(state.products, data.products || []);
+      mergeById(state.treatments, data.treatments || []);
+      mergeById(state.alerts, data.alerts || []);
+      state.activeCampaignId = data.campaign?.id || state.activeCampaignId;
+      state.history.imports.push({ mode, at: new Date().toISOString(), source: data.sourceDocument || 'JSON estructurado' });
+    }
+    ui.importPreview = null;
+    await saveState();
+    toast('Carga importada.');
+    ui.screen = 'home';
+    ui.morePanel = null;
+    syncNav();
+    render();
+  }
+
+  function mergeById(target, items) {
+    items.forEach(item => {
+      if (!target.some(existing => existing.id === item.id)) target.push(item);
+    });
+  }
+
+  async function applyTabularImport() {
+    const preview = ui.importPreview;
+    if (!preview || preview.kind !== 'tabular') return;
+    const mapping = preview.mapping || {};
+    if (!mapping.date || !mapping.productName) {
+      toast('Mapea al menos Fecha y Nombre del producto.');
+      return;
+    }
+    const now = new Date().toISOString();
+    const rows = [];
+    for (const raw of preview.rows) {
+      const dateRaw = raw[mapping.date] || '';
+      const date = textDateToIso(dateRaw) || (isIsoDate(dateRaw) ? dateRaw : '');
+      if (!date) continue;
+      const productName = (raw[mapping.productName] || '').trim();
+      if (!productName) continue;
+      let product = findProductByName(productName);
+      if (!product) {
+        product = createProvisionalProduct(productName, raw[mapping.crop] || 'Vid de vinificación', raw[mapping.objective] || '');
+        state.products.push(product);
+      }
+      rows.push({
+        id: `t_${cryptoRandom()}`,
+        campaignId: state.activeCampaignId,
+        date,
+        applicator: activeCampaign()?.applicator || '',
+        productId: product.id,
+        productName,
+        registration: raw[mapping.registration] || product.registration || 'A verificar',
+        lot: raw[mapping.lot] || 'A verificar',
+        doseReference: raw[mapping.doseReference] || product.doseReference || 'A verificar',
+        doseApplied: raw[mapping.doseApplied] || 'A verificar',
+        volumeReference: raw[mapping.volumeReference] || product.volumeReference || 'A verificar',
+        litersPerHa: raw[mapping.litersPerHa] || 'A verificar',
+        crop: raw[mapping.crop] || 'Vid de vinificación',
+        objective: raw[mapping.objective] || 'A verificar',
+        safetyPeriod: raw[mapping.safetyPeriod] || product.safetyPeriod || 'A verificar',
+        activeIngredients: raw[mapping.activeIngredients] || product.activeIngredients || 'A verificar',
+        mixRule: normalizeImportedMix(raw[mapping.mixRule] || product.mixRule || 'A verificar'),
+        verificationStatus: product.verificationStatus || 'PENDING',
+        observations: '',
+        incidence: 'Importación tabular: revisar datos técnicos.',
+        snapshot: buildSnapshot(product),
+        createdAt: now,
+        updatedAt: now
+      });
+    }
+    if (!rows.length) return toast('No se pudieron construir filas válidas.');
+    const ok = await confirmDialog('Importar filas tabulares', `Se incorporarán ${rows.length} fila(s) y quedarán bajo revisión cuando proceda.`, 'Importar', 'Cancelar');
+    if (!ok) return;
+    state.treatments.push(...rows);
+    rows.forEach(row => state.alerts.push(buildAlert('A_VERIFY', `Importación pendiente: ${row.productName}`, 'Fila importada desde tabla. Revisar validación técnica.', row.productId, row.id)));
+    state.history.imports.push({ mode: 'tabular', at: now, rows: rows.length });
+    ui.importPreview = null;
+    await saveState();
+    toast('Importación tabular aplicada.');
+    ui.screen = 'ledger';
+    ui.ledgerView = 'mobile';
+    syncNav();
+    render();
+  }
+
+  function normalizeImportedMix(value) {
+    const text = String(value || '').trim().toUpperCase();
+    if (text === 'SOLO') return 'SOLO';
+    if (text === 'A VERIFICAR') return 'A verificar';
+    if (text === 'MEZCLABLE' || text === '----' || text === '——') return '----';
+    return value || '----';
+  }
+
+  async function showEditTreatmentModal(id) {
+    const row = findTreatment(id);
+    if (!row) return;
+    const body = `
+      <div class="field"><span>Fecha</span><input id="editDate" type="date" value="${escapeAttr(row.date || '')}"></div>
+      <div class="field"><span>Producto</span><input id="editProductName" value="${escapeAttr(row.productName || '')}"></div>
+      <div class="field"><span>Aplicador</span><input id="editApplicator" value="${escapeAttr(row.applicator || '')}"></div>
+      <div class="inline-fields two">
+        <div class="field"><span>Lote</span><input id="editLot" value="${escapeAttr(row.lot || '')}"></div>
+        <div class="field"><span>Litros/ha</span><input id="editLiters" value="${escapeAttr(String(row.litersPerHa ?? ''))}"></div>
+      </div>
+      <div class="field"><span>Dosis aplicada</span><input id="editDose" value="${escapeAttr(row.doseApplied || '')}"></div>
+    `;
+    const decision = await choiceDialog(`Editar ${row.productName}`, body, [
+      { id: 'save', label: 'Guardar cambios', className: 'primary-btn' },
+      { id: 'cancel', label: 'Cancelar', className: 'ghost-btn' }
+    ], true);
+    if (decision !== 'save') { els.modalHost.innerHTML = ''; return; }
+    const date = document.getElementById('editDate')?.value || row.date;
+    if (isFutureDate(date)) {
+      const first = await confirmDialog('Fecha futura', `La fecha ${formatDate(date)} es futura. Primera confirmación.`, 'Continuar', 'Corregir');
+      if (!first) return;
+      const second = await confirmDialog('Doble verificación', 'Segunda confirmación para conservar fecha futura.', 'Confirmar', 'Cancelar');
+      if (!second) return;
+    }
+    const newName = document.getElementById('editProductName')?.value?.trim() || row.productName;
+    let product = findProductByName(newName);
+    if (!product) {
+      const ok = await confirmDialog('Producto provisional', 'El nuevo producto no existe. Se creará como A verificar.', 'Crear', 'Cancelar');
+      if (!ok) return;
+      product = createProvisionalProduct(newName, row.crop, row.objective);
+      state.products.push(product);
+    }
+    const newDose = document.getElementById('editDose')?.value?.trim() || row.doseApplied;
+    const newLiters = document.getElementById('editLiters')?.value?.trim() || row.litersPerHa;
+    const newApplicator = document.getElementById('editApplicator')?.value?.trim() || row.applicator;
+    const newLot = document.getElementById('editLot')?.value?.trim() || row.lot;
+    els.modalHost.innerHTML = '';
+    const validation = validateEntryAgainstProduct(product, newDose, newLiters);
+    let incidence = row.incidence || '';
+    if (!validation.ok) {
+      const keep = await confirmDialog('Validación técnica', `${validation.messages.map(escapeHtml).join('<br>')}<p>¿Conservar con incidencia?</p>`, 'Conservar', 'Corregir');
+      if (!keep) return;
+      incidence = [incidence, ...validation.messages].filter(Boolean).join(' | ');
+      state.alerts.push(buildAlert('INCIDENT', `Edición con incidencia: ${newName}`, validation.messages.join(' | '), product.id, row.id));
+    }
+    row.date = date;
+    row.productId = product.id;
+    row.productName = product.name;
+    row.registration = product.registration || row.registration;
+    row.applicator = newApplicator;
+    row.lot = newLot;
+    row.doseApplied = newDose;
+    row.litersPerHa = normalizeNumericString(newLiters);
+    row.doseReference = product.doseReference || row.doseReference;
+    row.volumeReference = product.volumeReference || row.volumeReference;
+    row.safetyPeriod = product.safetyPeriod || row.safetyPeriod;
+    row.activeIngredients = product.activeIngredients || row.activeIngredients;
+    row.mixRule = product.mixRule || row.mixRule;
+    row.verificationStatus = product.verificationStatus || row.verificationStatus;
+    row.snapshot = buildSnapshot(product);
+    row.incidence = incidence;
+    row.updatedAt = new Date().toISOString();
+    const resolvedFromEdit = reconcileAlertsForProduct(product);
+    await saveState();
+    toast(`Tratamiento actualizado.${resolvedFromEdit ? ` ${resolvedFromEdit} alerta(s) técnica(s) resuelta(s).` : ''}`);
+    render();
+  }
+
+  function renderOptions(options, selected) {
+    return options.map(option => `<option value="${escapeAttr(option)}" ${selected === option ? 'selected' : ''}>${escapeHtml(option)}</option>`).join('');
+  }
+
+  function normalizeText(value) {
+    return String(value || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase()
+      .trim();
+  }
+
+  function normalizeNumericString(value) {
+    const text = String(value ?? '').trim();
+    if (!text) return '';
+    const num = Number(text.replace(',', '.'));
+    return Number.isFinite(num) ? num : text;
+  }
+
+  function formatDate(iso) {
+    if (!iso) return '—';
+    const [y, m, d] = String(iso).split('-');
+    return `${d}/${m}/${y}`;
+  }
+
+  function formatDateTime(iso) {
+    try { return new Intl.DateTimeFormat('es-ES', { dateStyle: 'short', timeStyle: 'short' }).format(new Date(iso)); }
+    catch { return iso || '—'; }
+  }
+
+  function isoToTextDate(iso) {
+    return formatDate(iso);
+  }
+
+  function textDateToIso(text) {
+    const match = String(text || '').trim().match(/^(\d{2})\/(\d{2})\/(\d{4})$/);
+    if (!match) return '';
+    const [, dd, mm, yyyy] = match;
+    const iso = `${yyyy}-${mm}-${dd}`;
+    if (!isIsoDate(iso)) return '';
+    return iso;
+  }
+
+  function isIsoDate(iso) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(iso || ''))) return false;
+    const date = new Date(`${iso}T12:00:00`);
+    return !Number.isNaN(date.valueOf()) && date.toISOString().slice(0, 10) === iso;
+  }
+
+  function isFutureDate(iso) {
+    if (!isIsoDate(iso)) return false;
+    return iso > todayLocalIso();
+  }
+
+  function todayLocalIso() {
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = String(now.getMonth() + 1).padStart(2, '0');
+    const d = String(now.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  }
+
+  function dateStamp() {
+    return todayLocalIso().replace(/-/g, '');
+  }
+
+  function formatDecimal(value) {
+    return Number.isFinite(value) ? String(Math.round(value * 10000) / 10000).replace('.', ',') : 'no verificable';
+  }
+
+  function cryptoRandom() {
+    if (window.crypto?.randomUUID) return window.crypto.randomUUID().replace(/-/g, '');
+    return `${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`;
+  }
+
+  function deepClone(value) {
+    return JSON.parse(JSON.stringify(value));
+  }
+
+  function escapeHtml(value) {
+    return String(value ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function escapeAttr(value) { return escapeHtml(value); }
+
+  function toast(message) {
+    els.toast.textContent = message;
+    els.toast.classList.remove('hidden');
+    clearTimeout(toast._timer);
+    toast._timer = setTimeout(() => els.toast.classList.add('hidden'), 3200);
+  }
+
+  function showInfoModal(title, bodyHtml) {
+    return choiceDialog(title, bodyHtml, [{ id: 'close', label: 'Cerrar', className: 'primary-btn' }]);
+  }
+
+  function confirmDialog(title, bodyHtml, confirmLabel = 'Confirmar', cancelLabel = 'Cancelar') {
+    return choiceDialog(title, bodyHtml, [
+      { id: 'confirm', label: confirmLabel, className: 'primary-btn' },
+      { id: 'cancel', label: cancelLabel, className: 'ghost-btn' }
+    ]).then(result => result === 'confirm');
+  }
+
+  function choiceDialog(title, bodyHtml, actions, preserveDom = false) {
+    return new Promise(resolve => {
+      els.modalHost.innerHTML = `
+        <div class="modal-backdrop" role="dialog" aria-modal="true">
+          <section class="modal-card">
+            <h2>${escapeHtml(title)}</h2>
+            <div class="modal-body">${bodyHtml}</div>
+            <div class="modal-actions">
+              ${actions.map(action => `<button type="button" class="${escapeAttr(action.className || 'ghost-btn')}" data-modal-result="${escapeAttr(action.id)}">${escapeHtml(action.label)}</button>`).join('')}
+            </div>
+          </section>
+        </div>
+      `;
+      const backdrop = els.modalHost.querySelector('.modal-backdrop');
+      const handler = event => {
+        const btn = event.target.closest('[data-modal-result]');
+        if (!btn) return;
+        const result = btn.dataset.modalResult;
+        if (!preserveDom) els.modalHost.innerHTML = '';
+        resolve(result);
+      };
+      backdrop.addEventListener('click', handler);
+    });
+  }
 })();

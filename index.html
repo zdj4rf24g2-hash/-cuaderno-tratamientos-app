@@ -1,60 +1,47 @@
 <!doctype html>
 <html lang="es">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-  <meta name="theme-color" content="#1f6b45" />
-  <meta name="apple-mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
-  <meta name="apple-mobile-web-app-title" content="Cuaderno Tratamientos" />
-  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
-  <meta http-equiv="Pragma" content="no-cache" />
-  <meta http-equiv="Expires" content="0" />
-  <title>App Cuaderno de Tratamientos · V 2.0</title>
-  <link rel="manifest" href="manifest.webmanifest?v=2.0.0" />
-  <link rel="apple-touch-icon" href="apple-touch-icon.png?v=2.0.0" />
-  <link rel="icon" href="icon-192.png?v=2.0.0" />
-  <link rel="stylesheet" href="styles.css?v=2.0.0" />
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#155e75">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="Cuaderno">
+  <title>Cuaderno de Tratamientos</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="apple-touch-icon" href="icon-192.png">
+  <link rel="icon" href="icon-192.png">
+  <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <div id="app" class="app-shell">
-    <header class="topbar">
-      <div class="topbar-inner">
-        <div>
-          <p class="eyebrow">APP CUADERNO DE TRATAMIENTOS · V 2.0</p>
-          <h1>Campaña 2026</h1>
-        </div>
-        <button id="installButton" class="ghost-button install-hidden" type="button" aria-label="Instalar app">Instalar</button>
+  <header class="app-header" role="banner">
+    <div class="brand-row">
+      <div>
+        <p class="eyebrow">APP CUADERNO DE TRATAMIENTOS · V 2.0</p>
+        <h1>Campaña <span id="activeCampaignLabel">2026</span></h1>
       </div>
-      <div class="global-search-wrap">
-        <label class="sr-only" for="globalSearch">Buscar</label>
-        <input id="globalSearch" class="global-search" type="search" placeholder="Buscar tratamientos, productos, incidencias u observaciones" autocomplete="off" />
-      </div>
-    </header>
+      <button id="installHintBtn" class="ghost-btn compact" type="button" title="Instalación">PWA</button>
+    </div>
+    <label class="global-search-wrap">
+      <span class="sr-only">Buscar en tratamientos, productos, incidencias y observaciones</span>
+      <input id="globalSearch" type="search" autocomplete="off" placeholder="Buscar tratamientos, productos, incidencias…">
+    </label>
+    <section id="globalSearchResults" class="search-results hidden" aria-live="polite"></section>
+  </header>
 
-    <main class="content-area">
-      <section id="view-inicio" class="view active" data-view="inicio"></section>
-      <section id="view-nuevo" class="view" data-view="nuevo"></section>
-      <section id="view-cuaderno" class="view" data-view="cuaderno"></section>
-      <section id="view-alertas" class="view" data-view="alertas"></section>
-      <section id="view-mas" class="view" data-view="mas"></section>
-    </main>
+  <main id="screen" class="screen" tabindex="-1"></main>
 
-    <nav class="bottom-nav" aria-label="Navegación principal">
-      <button type="button" class="nav-button active" data-nav="inicio"><span>⌂</span><small>Inicio</small></button>
-      <button type="button" class="nav-button" data-nav="nuevo"><span>＋</span><small>Nuevo</small></button>
-      <button type="button" class="nav-button" data-nav="cuaderno"><span>▤</span><small>Cuaderno</small></button>
-      <button type="button" class="nav-button" data-nav="alertas"><span>!</span><small>Alertas</small></button>
-      <button type="button" class="nav-button" data-nav="mas"><span>⋯</span><small>Más</small></button>
-    </nav>
-  </div>
+  <nav class="bottom-nav" aria-label="Navegación principal">
+    <button type="button" data-screen="home" class="nav-item active"><span>⌂</span><small>Inicio</small></button>
+    <button type="button" data-screen="new" class="nav-item"><span>＋</span><small>Nuevo</small></button>
+    <button type="button" data-screen="ledger" class="nav-item"><span>▤</span><small>Cuaderno</small></button>
+    <button type="button" data-screen="alerts" class="nav-item"><span>!</span><small>Alertas</small></button>
+    <button type="button" data-screen="more" class="nav-item"><span>⋯</span><small>Más</small></button>
+  </nav>
 
-  <div id="modalRoot" class="modal-root" aria-live="polite"></div>
-  <div id="toastRoot" class="toast-root" aria-live="polite"></div>
-  <input id="backupImportInput" class="hidden-file-input" type="file" accept="application/json,.json" />
-  <input id="catalogDocInput" class="hidden-file-input" type="file" multiple accept="image/*,application/pdf,.pdf,.png,.jpg,.jpeg,.webp" />
+  <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+  <div id="modalHost"></div>
 
-  <script src="vendor-loader.js?v=2.0.0"></script>
-  <script src="app.js?v=2.0.0"></script>
+  <script src="app.js"></script>
 </body>
 </html>

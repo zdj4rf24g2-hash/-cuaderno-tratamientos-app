@@ -1,0 +1,15 @@
+APP CUADERNO DE TRATAMIENTOS · V 2.0
+
+Versión integrada generada a partir de la base visual y funcional V1.8 con sus parches consolidados.
+
+Archivos listos para publicar en GitHub Pages desde la raíz del repositorio:
+- index.html
+- styles.css
+- app.js
+- manifest.webmanifest
+- sw.js
+- icon-192.png
+- icon-512.png
+
+La estructura y presentación visual se conservan respecto a la V1.8 aportada.
+Se actualiza únicamente la identificación de versión a V2.0 y el service worker para forzar actualización de caché.
