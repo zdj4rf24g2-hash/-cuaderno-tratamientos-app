@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const APP_VERSION = '2.7';
+  const APP_VERSION = '2.8';
   const SCHEMA_VERSION = '1.0.0';
   const DB_NAME = 'cuaderno-tratamientos-pwa-v1';
   const DB_STORE = 'state';
@@ -236,7 +236,7 @@
 
   function registerServiceWorker() {
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('sw.js?v=2.7', { updateViaCache: 'none' }).then(registration => registration.update()).catch(error => console.warn('SW no registrado', error));
+      navigator.serviceWorker.register('sw.js?v=2.8', { updateViaCache: 'none' }).then(registration => registration.update()).catch(error => console.warn('SW no registrado', error));
     }
   }
 
@@ -959,9 +959,12 @@
     if (event.target.matches('[data-dose-ui-mode], [data-dose-fixed-unit], [data-dose-range-unit], [data-dose-concentration-kind], [data-dose-concentration-unit]')) {
       return syncReviewDoseRulePanels(event.target.closest('[data-dose-review-editor]'));
     }
+    if (event.target.matches('[data-volume-ui-mode]')) {
+      return syncReviewVolumeReferencePanels(event.target.closest('[data-review-volume-editor="volumeReference"]'));
+    }
     const reviewVolumeField = event.target.dataset.reviewVolumeField;
     if (reviewVolumeField === 'volumeReference.mode') {
-      return syncReviewVolumeReferencePanels(event.target.closest('[data-review-volume-editor="volumeReference"]'), event.target.value || '');
+      return syncReviewVolumeReferencePanels(event.target.closest('[data-review-volume-editor="volumeReference"]'));
     }
     const reviewVolumeRuleField = event.target.dataset.reviewRuleField;
     if (reviewVolumeRuleField === 'volumeRule.mode') {
@@ -3129,7 +3132,7 @@ ${text}`);
       case 'textarea':
         return `<textarea data-review-manual="${escapeAttr(field.key)}" placeholder="Escribe el valor correcto o deja vacío para usar la propuesta automática."></textarea>`;
       case 'volumeReferenceStructured':
-        return renderDocumentReviewVolumeReferenceEditor(suggestion);
+        return renderDocumentReviewVolumeReferenceEditor(suggestion, suggestions?.volumeRule);
       case 'lines':
         return `<textarea data-review-manual="${escapeAttr(field.key)}" placeholder="Uno por línea. Ej.: Vid de vinificación"></textarea>`;
       case 'mix':
@@ -3402,28 +3405,106 @@ ${text}`);
   }
 
 
-  function renderDocumentReviewVolumeReferenceEditor(suggestion) {
+  function renderDocumentReviewVolumeReferenceEditor(suggestion, ruleSuggestion) {
+    const preset = normalizeVolumeReviewSuggestion(suggestion, ruleSuggestion);
     return `
-      <div class="review-volume-editor" data-review-volume-editor="volumeReference">
-        <div class="field"><span>Formato de volumen caldo</span><select data-review-volume-field="volumeReference.mode">${renderSimpleOptions([
-          ['', 'Usar propuesta automática / no cambiar'],
-          ['fixed', 'Volumen único'],
-          ['range', 'Volumen mínimo y máximo'],
-          ['not_listed', 'No consta en documentación']
-        ], '')}</select></div>
-        <p class="muted compact-note">Unidad fija: <strong>L/ha</strong>. La regla de validación de volumen se generará automáticamente a partir de esta selección; no tendrás que introducirla de nuevo.</p>
-        <div class="hidden" data-review-volume-panel="volumeReference.fixed">
-          <div class="field"><span>Volumen único</span><input data-review-volume-field="volumeReference.value" inputmode="decimal" placeholder="L/ha"></div>
-        </div>
-        <div class="hidden" data-review-volume-panel="volumeReference.range">
-          <div class="inline-fields two">
-            <div class="field"><span>Volumen mínimo</span><input data-review-volume-field="volumeReference.min" inputmode="decimal" placeholder="L/ha"></div>
-            <div class="field"><span>Volumen máximo</span><input data-review-volume-field="volumeReference.max" inputmode="decimal" placeholder="L/ha"></div>
+      <div class="dose-review-editor" data-review-volume-editor="volumeReference">
+        <div class="dose-review-info"><strong>Revisa el volumen de caldo indicado en la etiqueta y completa solo lo necesario.</strong></div>
+        <div class="dose-review-stephead">
+          <span class="step-badge">1</span>
+          <div>
+            <strong>¿Qué indica la etiqueta sobre el volumen de caldo?</strong>
+            <p>Unidad fija: <strong>L/ha</strong>.</p>
           </div>
         </div>
+        <div class="dose-choice-list">
+          <label class="dose-choice-card ${preset.uiMode === 'fixed' ? 'selected' : ''}">
+            <input type="radio" name="volumeReferenceUiMode" data-volume-ui-mode value="fixed" ${preset.uiMode === 'fixed' ? 'checked' : ''}>
+            <div>
+              <strong>Volumen único</strong>
+              <small>La etiqueta indica un único volumen de caldo por hectárea.</small>
+            </div>
+          </label>
+          <label class="dose-choice-card ${preset.uiMode === 'range' ? 'selected' : ''}">
+            <input type="radio" name="volumeReferenceUiMode" data-volume-ui-mode value="range" ${preset.uiMode === 'range' ? 'checked' : ''}>
+            <div>
+              <strong>Volumen mínimo – máximo</strong>
+              <small>La etiqueta indica un mínimo y un máximo por hectárea.</small>
+            </div>
+          </label>
+          <label class="dose-choice-card ${preset.uiMode === 'not_listed' ? 'selected' : ''}">
+            <input type="radio" name="volumeReferenceUiMode" data-volume-ui-mode value="not_listed" ${preset.uiMode === 'not_listed' ? 'checked' : ''}>
+            <div>
+              <strong>No consta</strong>
+              <small>La documentación no indica volumen de caldo para este uso.</small>
+            </div>
+          </label>
+        </div>
+        <div class="dose-review-stephead secondary">
+          <span class="step-badge">2</span>
+          <div>
+            <strong>Introduce los datos</strong>
+            <p>Solo se muestran los campos necesarios según la opción elegida.</p>
+          </div>
+        </div>
+        <div class="dose-review-note">La regla de validación de volumen se generará automáticamente a partir de esta selección.</div>
+
+        <section class="dose-panel ${preset.uiMode === 'fixed' ? '' : 'hidden'}" data-review-volume-panel="volumeReference.fixed">
+          <h4>Volumen único</h4>
+          <div class="field"><span>Volumen único</span><input data-review-volume-field="volumeReference.value" value="${escapeAttr(ruleInputValue(preset.fixedValue))}" inputmode="decimal" placeholder="Ej. 400"></div>
+        </section>
+
+        <section class="dose-panel ${preset.uiMode === 'range' ? '' : 'hidden'}" data-review-volume-panel="volumeReference.range">
+          <h4>Volumen mínimo – máximo</h4>
+          <div class="inline-fields two">
+            <div class="field"><span>Volumen mínimo</span><input data-review-volume-field="volumeReference.min" value="${escapeAttr(ruleInputValue(preset.min))}" inputmode="decimal" placeholder="Ej. 300"></div>
+            <div class="field"><span>Volumen máximo</span><input data-review-volume-field="volumeReference.max" value="${escapeAttr(ruleInputValue(preset.max))}" inputmode="decimal" placeholder="Ej. 500"></div>
+          </div>
+        </section>
       </div>
     `;
   }
+
+  function normalizeVolumeReviewSuggestion(suggestion, ruleSuggestion) {
+    const preset = { uiMode: '', fixedValue: '', min: '', max: '' };
+    const rule = ruleSuggestion && typeof ruleSuggestion === 'object' ? ruleSuggestion : null;
+    if (rule?.mode === 'fixed') {
+      preset.uiMode = 'fixed';
+      preset.fixedValue = ruleInputValue(rule.value);
+      return preset;
+    }
+    if (rule?.mode === 'range') {
+      preset.uiMode = 'range';
+      preset.min = ruleInputValue(rule.min);
+      preset.max = ruleInputValue(rule.max);
+      return preset;
+    }
+    if (rule?.mode === 'not_listed') {
+      preset.uiMode = 'not_listed';
+      return preset;
+    }
+    const normalized = String(suggestion || '').replace(/\s+/g, ' ').replace(/,/g, '.').trim();
+    if (!normalized) return preset;
+    if (/NO\s+CONSTA/i.test(normalized)) {
+      preset.uiMode = 'not_listed';
+      return preset;
+    }
+    const range = normalized.match(/M[IÍ]N\.?\s*(\d+(?:\.\d+)?)\s*L\s*\/\s*HA.*M[ÁA]X\.?\s*(\d+(?:\.\d+)?)\s*L\s*\/\s*HA/i)
+      || normalized.match(/(\d+(?:\.\d+)?)\s*(?:-|–|A)\s*(\d+(?:\.\d+)?)\s*L\s*\/\s*HA/i);
+    if (range) {
+      preset.uiMode = 'range';
+      preset.min = range[1];
+      preset.max = range[2];
+      return preset;
+    }
+    const fixed = normalized.match(/(\d+(?:\.\d+)?)\s*L\s*\/\s*HA/i);
+    if (fixed) {
+      preset.uiMode = 'fixed';
+      preset.fixedValue = fixed[1];
+    }
+    return preset;
+  }
+
 
   function renderDocumentReviewVolumeRuleEditor(suggestion) {
     return `
@@ -3449,8 +3530,17 @@ ${text}`);
     `;
   }
 
-  function syncReviewVolumeReferencePanels(container, mode) {
+  function getSelectedVolumeUiMode(root = document) {
+    return root.querySelector('[data-volume-ui-mode]:checked')?.value || '';
+  }
+
+  function syncReviewVolumeReferencePanels(container) {
     if (!container) return;
+    const mode = getSelectedVolumeUiMode(container);
+    container.querySelectorAll('.dose-choice-card').forEach(card => {
+      const input = card.querySelector('[data-volume-ui-mode]');
+      if (input) card.classList.toggle('selected', !!input.checked);
+    });
     container.querySelector('[data-review-volume-panel="volumeReference.fixed"]')?.classList.toggle('hidden', mode !== 'fixed');
     container.querySelector('[data-review-volume-panel="volumeReference.range"]')?.classList.toggle('hidden', mode !== 'range');
   }
@@ -3520,7 +3610,7 @@ ${text}`);
       return collectDoseRuleManualFromReview();
     }
     if (field.kind === 'volumeReferenceStructured') {
-      const mode = readReviewVolumeField('volumeReference.mode');
+      const mode = getSelectedVolumeUiMode(document.querySelector('[data-review-volume-editor="volumeReference"]'));
       if (!mode) return { hasManual: false, value: null };
       if (mode === 'not_listed') {
         return { hasManual: true, value: 'NO CONSTA', derivedVolumeRule: { mode: 'not_listed' } };
@@ -3529,7 +3619,8 @@ ${text}`);
         const value = readReviewVolumeNumeric('volumeReference.value');
         return {
           hasManual: true,
-          value: Number.isFinite(value) ? `${formatDocNumber(value)} L/ha\nÚNICO` : '',
+          value: Number.isFinite(value) ? `${formatDocNumber(value)} L/ha
+ÚNICO` : '',
           derivedVolumeRule: buildVolumeRuleFromEdit({ mode, value })
         };
       }
@@ -3538,7 +3629,8 @@ ${text}`);
         const max = readReviewVolumeNumeric('volumeReference.max');
         return {
           hasManual: true,
-          value: Number.isFinite(min) && Number.isFinite(max) ? `Mín. ${formatDocNumber(min)} L/ha\nMáx. ${formatDocNumber(max)} L/ha` : '',
+          value: Number.isFinite(min) && Number.isFinite(max) ? `Mín. ${formatDocNumber(min)} L/ha
+Máx. ${formatDocNumber(max)} L/ha` : '',
           derivedVolumeRule: buildVolumeRuleFromEdit({ mode, min, max })
         };
       }
@@ -3585,7 +3677,12 @@ ${text}`);
   }
 
   function readReviewVolumeField(key) {
-    return document.querySelector(`[data-review-volume-field="${cssEscapeValue(key)}"]`)?.value?.trim() ?? '';
+    const nodes = Array.from(document.querySelectorAll(`[data-review-volume-field="${cssEscapeValue(key)}"]`));
+    if (!nodes.length) return '';
+    const radio = nodes[0];
+    if (radio.type === 'radio') return nodes.find(node => node.checked)?.value?.trim() ?? '';
+    const preferred = nodes.find(node => !node.closest('.hidden')) || nodes[0];
+    return preferred?.value?.trim() ?? '';
   }
 
   function readReviewVolumeNumeric(key) {
