@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const APP_VERSION = '2.9';
+  const APP_VERSION = '2.10';
   const SCHEMA_VERSION = '1.0.0';
   const DB_NAME = 'cuaderno-tratamientos-pwa-v1';
   const DB_STORE = 'state';
@@ -236,7 +236,7 @@
 
   function registerServiceWorker() {
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('sw.js?v=2.9', { updateViaCache: 'none' }).then(registration => registration.update()).catch(error => console.warn('SW no registrado', error));
+      navigator.serviceWorker.register('sw.js?v=2.10', { updateViaCache: 'none' }).then(registration => registration.update()).catch(error => console.warn('SW no registrado', error));
     }
   }
 
@@ -755,12 +755,16 @@
     return `
       ${renderBackToMore('Catálogo de productos', 'Verificados, pendientes, activos y archivados.')}
       <section class="section-card">
+        <div class="button-row" style="margin-bottom:12px">
+          <button class="primary-btn" data-action="new-catalog-product">Nuevo producto</button>
+        </div>
         ${products.length ? `<div class="product-list">${products.map(renderProductCard).join('')}</div>` : renderEmpty('Catálogo vacío', 'Importa la carga inicial o crea productos provisionales desde Nuevo.')}
       </section>
     `;
   }
 
   function renderProductCard(product) {
+    ensureProductDocumentShape(product);
     return `
       <article class="product-card ${product.verificationStatus === 'PENDING' ? 'warning' : ''}">
         <div class="section-header">
@@ -770,14 +774,28 @@
           </div>
           <span class="tag ${product.verificationStatus === 'VERIFIED' ? 'ok' : 'pending'}">${product.verificationStatus === 'VERIFIED' ? 'Verificado' : 'A verificar'}</span>
         </div>
-        <div class="product-meta">
-          <span class="tag">Máx.: ${product.maxApplications ?? 'NO CONSTA'}</span>
-          <span class="tag">MEZCLA: ${escapeHtml(product.mixRule || '----')}</span>
-          <span class="tag">Docs: ${(product.documents || []).length}</span>
+        <div class="kv-grid">
+          <div class="kv"><strong>Registro</strong><span>${escapeHtml(product.registration || '—')}</span></div>
+          <div class="kv"><strong>Estado</strong><span>${escapeHtml(product.verificationStatus || '—')}</span></div>
+          <div class="kv"><strong>Dosis</strong><span>${escapeHtml(product.doseReference || '—')}</span></div>
+          <div class="kv"><strong>Regla dosis</strong><span>${escapeHtml(product.doseRule?.mode || 'pending')}</span></div>
+          <div class="kv"><strong>Volumen caldo</strong><span>${escapeHtml(product.volumeReference || '—')}</span></div>
+          <div class="kv"><strong>Regla volumen</strong><span>${escapeHtml(product.volumeRule?.mode || 'pending')}</span></div>
+          <div class="kv"><strong>P.S.</strong><span>${escapeHtml(product.safetyPeriod || '—')}</span></div>
+          <div class="kv"><strong>Máx. campaña</strong><span>${escapeHtml(String(product.maxApplications ?? 'NO CONSTA'))}</span></div>
+          <div class="kv"><strong>Principios activos</strong><span>${escapeHtml(product.activeIngredients || '—')}</span></div>
+          <div class="kv"><strong>MEZCLA</strong><span>${escapeHtml(product.mixRule || '----')}</span></div>
+          <div class="kv"><strong>Usos autorizados</strong><span>${escapeHtml(renderInlineList(product.allowedUses, '—'))}</span></div>
+          <div class="kv"><strong>Objetivos</strong><span>${escapeHtml(renderInlineList(product.allowedObjectives, '—'))}</span></div>
+          <div class="kv"><strong>Intervalo</strong><span>${escapeHtml(product.applicationInterval || '—')}</span></div>
+          <div class="kv"><strong>Estadio / condiciones</strong><span>${escapeHtml(product.applicationStage || '—')}</span></div>
+          <div class="kv"><strong>Docs</strong><span>${(product.documents || []).length}</span></div>
+          <div class="kv"><strong>Fuente</strong>${renderProductSource(product)}</div>
         </div>
         <div class="button-row" style="margin-top:12px">
           <button class="ghost-btn" data-action="view-product" data-id="${escapeAttr(product.id)}">Ver ficha</button>
           <button class="secondary-btn" data-action="edit-product" data-id="${escapeAttr(product.id)}">Editar ficha</button>
+          <button class="danger-btn" data-action="delete-catalog-product" data-id="${escapeAttr(product.id)}">Eliminar producto</button>
         </div>
       </article>
     `;
@@ -934,6 +952,8 @@
     if (action === 'resolve-alert') return resolveAlert(btn.dataset.id);
     if (action === 'view-product') return showProductModal(btn.dataset.id);
     if (action === 'edit-product') return showProductEditChoice(btn.dataset.id);
+    if (action === 'new-catalog-product') return createCatalogProduct();
+    if (action === 'delete-catalog-product') return deleteCatalogProduct(btn.dataset.id);
     if (action === 'save-applicator') return saveCampaignApplicator();
     if (action === 'run-self-check') return runSelfCheck();
     if (action === 'download-backup') return downloadBackup();
@@ -1740,6 +1760,49 @@
       createdAt: new Date().toISOString(),
       resolvedAt: null
     };
+  }
+
+  async function createCatalogProduct() {
+    const body = `
+      <div class="field"><span>Nombre del producto</span><input id="newCatalogProductName" autocomplete="off" placeholder="Escribe el nombre comercial"></div>
+      <p class="muted">Se añadirá al catálogo como <strong>A verificar</strong>. Después podrás completar su ficha.</p>
+    `;
+    const decision = await choiceDialog('Nuevo producto', body, [
+      { id: 'create', label: 'Crear producto', className: 'primary-btn' },
+      { id: 'cancel', label: 'Cancelar', className: 'ghost-btn' }
+    ], true);
+    if (decision !== 'create') { els.modalHost.innerHTML = ''; return; }
+    const name = document.getElementById('newCatalogProductName')?.value?.trim() || '';
+    if (!name) {
+      toast('Indica el nombre del producto.');
+      return createCatalogProduct();
+    }
+    if (findProductByName(name)) {
+      toast('Ese producto ya existe en el catálogo.');
+      return createCatalogProduct();
+    }
+    const product = createProvisionalProduct(name, '', '');
+    state.products.push(product);
+    await saveState();
+    els.modalHost.innerHTML = '';
+    toast('Producto añadido al catálogo.');
+    render();
+  }
+
+  async function deleteCatalogProduct(id) {
+    const product = findProduct(id);
+    if (!product) return;
+    const ok = await confirmDialog(
+      'Eliminar producto del catálogo',
+      `<p>Se eliminará <strong>${escapeHtml(product.name)}</strong> del catálogo y dejará de estar disponible para nuevos tratamientos.</p><p><strong>No se borrarán ni modificarán</strong> los tratamientos ya aplicados.</p>`,
+      'Eliminar producto',
+      'Cancelar'
+    );
+    if (!ok) return;
+    state.products = state.products.filter(item => item.id !== id);
+    await saveState();
+    toast('Producto eliminado del catálogo.');
+    render();
   }
 
   async function showProductModal(id) {
