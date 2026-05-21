@@ -1,0 +1,23 @@
+APP CUADERNO DE TRATAMIENTOS · V2.15
+
+Base de trabajo: APP_CUADERNO_TRATAMIENTOS_V2_14_COMPLETA_SIN_SUBCARPETAS.zip
+
+Archivos listos para publicar en GitHub Pages desde la raíz del repositorio:
+- index.html
+- styles.css
+- app.js
+- manifest.webmanifest
+- sw.js
+- icon-192.png
+- icon-512.png
+
+Cambio solicitado aplicado en V2.15:
+- En el modal Nuevo producto, cuando existe una Base MAPA reducida cargada, la app muestra sugerencias de productos MAPA a medida que se escriben caracteres del nombre comercial o número de registro.
+- Al seleccionar una sugerencia MAPA, el campo se completa con el nombre oficial y la creación usa ese producto MAPA para el prerrelleno asistido.
+- Si no se selecciona sugerencia, se mantiene el funcionamiento anterior de coincidencias MAPA/provisional.
+
+Ajustes técnicos estrictamente necesarios:
+- Actualización de versión visible, APP_VERSION, service worker y CACHE_NAME a V2.15.
+
+No se han añadido datos reales incrustados en el código.
+El estado inicial mantiene products: [], treatments: [], alerts: [] y drafts: [].
