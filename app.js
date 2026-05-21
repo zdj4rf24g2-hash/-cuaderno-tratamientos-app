@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const APP_VERSION = '2.19';
+  const APP_VERSION = '2.20';
   const SCHEMA_VERSION = '1.0.0';
   const DB_NAME = 'cuaderno-tratamientos-pwa-v1';
   const DB_STORE = 'state';
@@ -241,7 +241,7 @@
 
   function registerServiceWorker() {
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('sw.js?v=2.19', { updateViaCache: 'none' }).then(registration => registration.update()).catch(error => console.warn('SW no registrado', error));
+      navigator.serviceWorker.register('sw.js?v=2.20', { updateViaCache: 'none' }).then(registration => registration.update()).catch(error => console.warn('SW no registrado', error));
     }
   }
 
@@ -820,15 +820,15 @@
           <span class="tag ${product.verificationStatus === 'VERIFIED' ? 'ok' : 'pending'}">${product.verificationStatus === 'VERIFIED' ? 'Verificado' : 'A verificar'}</span>
         </div>
         <div class="kv-grid">
-          <div class="kv"><strong>Dosis</strong><span>${escapeHtml(product.doseReference || '—')}</span></div>
-          <div class="kv"><strong>Volumen caldo</strong><span>${escapeHtml(product.volumeReference || '—')}</span></div>
-          <div class="kv"><strong>P.S.</strong><span>${escapeHtml(product.safetyPeriod || '—')}</span></div>
+          <div class="kv"><strong>Dosis</strong>${renderCatalogValue(product.doseReference, 'A verificar')}</div>
+          <div class="kv"><strong>Volumen caldo</strong>${renderCatalogValue(product.volumeReference, 'A verificar')}</div>
+          <div class="kv"><strong>P.S.</strong>${renderCatalogValue(product.safetyPeriod, 'A verificar')}</div>
           <div class="kv"><strong>Máx. campaña</strong><span>${escapeHtml(String(product.maxApplications ?? 'NO CONSTA'))}</span></div>
-          <div class="kv"><strong>Principios activos</strong><span>${escapeHtml(product.activeIngredients || '—')}</span></div>
-          <div class="kv"><strong>MEZCLA</strong><span>${escapeHtml(product.mixRule || '----')}</span></div>
+          <div class="kv"><strong>Principios activos</strong>${renderCatalogValue(product.activeIngredients, 'A verificar')}</div>
+          <div class="kv"><strong>MEZCLA</strong>${renderCatalogValue(product.mixRule || 'A verificar', 'A verificar')}</div>
           <div class="kv"><strong>Usos autorizados</strong><span>${escapeHtml(renderInlineList(product.allowedUses, '—'))}</span></div>
           <div class="kv"><strong>Objetivos</strong><span>${escapeHtml(renderInlineList(product.allowedObjectives, '—'))}</span></div>
-          <div class="kv"><strong>Intervalo</strong><span>${escapeHtml(product.applicationInterval || '—')}</span></div>
+          <div class="kv"><strong>Intervalo</strong>${renderCatalogValue(product.applicationInterval, 'A verificar')}</div>
           <div class="kv"><strong>Docs</strong><span>${(product.documents || []).length}</span></div>
         </div>
         <div class="button-row" style="margin-top:12px">
@@ -2016,6 +2016,18 @@
     return /a verificar|pendiente/i.test(String(value ?? ''));
   }
 
+  function normalizeCatalogValue(value, fallback = 'A verificar') {
+    const text = String(value ?? '').trim();
+    if (!text || text === '-' || text === '—' || /^pending$/i.test(text)) return fallback;
+    return text;
+  }
+
+  function renderCatalogValue(value, fallback = 'A verificar') {
+    const text = normalizeCatalogValue(value, fallback);
+    const attention = containsPending(text) || text === 'A verificar';
+    return `<span class="${attention ? 'attention-text' : ''}">${escapeHtml(text)}</span>`;
+  }
+
   async function resolveAlert(id) {
     const alert = state.alerts.find(a => a.id === id);
     if (!alert) return;
@@ -2217,20 +2229,17 @@
     ensureProductDocumentShape(product);
     const body = `
       <div class="kv-grid">
-        <div class="kv"><strong>Registro</strong><span>${escapeHtml(product.registration || '—')}</span></div>
+        <div class="kv"><strong>Registro</strong>${renderCatalogValue(product.registration, 'A verificar')}</div>
         <div class="kv"><strong>Estado</strong><span>${escapeHtml(product.verificationStatus || '—')}</span></div>
-        <div class="kv"><strong>Dosis</strong><span>${escapeHtml(product.doseReference || '—')}</span></div>
-        <div class="kv"><strong>Regla dosis</strong><span>${escapeHtml(product.doseRule?.mode || 'pending')}</span></div>
-        <div class="kv"><strong>Volumen caldo</strong><span>${escapeHtml(product.volumeReference || '—')}</span></div>
-        <div class="kv"><strong>Regla volumen</strong><span>${escapeHtml(product.volumeRule?.mode || 'pending')}</span></div>
-        <div class="kv"><strong>P.S.</strong><span>${escapeHtml(product.safetyPeriod || '—')}</span></div>
+        <div class="kv"><strong>Dosis</strong>${renderCatalogValue(product.doseReference, 'A verificar')}</div>
+        <div class="kv"><strong>Volumen caldo</strong>${renderCatalogValue(product.volumeReference, 'A verificar')}</div>
+        <div class="kv"><strong>P.S.</strong>${renderCatalogValue(product.safetyPeriod, 'A verificar')}</div>
         <div class="kv"><strong>Máx. campaña</strong><span>${escapeHtml(String(product.maxApplications ?? 'NO CONSTA'))}</span></div>
-        <div class="kv"><strong>Principios activos</strong><span>${escapeHtml(product.activeIngredients || '—')}</span></div>
-        <div class="kv"><strong>MEZCLA</strong><span>${escapeHtml(product.mixRule || '----')}</span></div>
+        <div class="kv"><strong>Principios activos</strong>${renderCatalogValue(product.activeIngredients, 'A verificar')}</div>
+        <div class="kv"><strong>MEZCLA</strong>${renderCatalogValue(product.mixRule || 'A verificar', 'A verificar')}</div>
         <div class="kv"><strong>Usos autorizados</strong><span>${escapeHtml(renderInlineList(product.allowedUses, '—'))}</span></div>
         <div class="kv"><strong>Objetivos</strong><span>${escapeHtml(renderInlineList(product.allowedObjectives, '—'))}</span></div>
-        <div class="kv"><strong>Intervalo</strong><span>${escapeHtml(product.applicationInterval || '—')}</span></div>
-        <div class="kv"><strong>Estadio / condiciones</strong><span>${escapeHtml(product.applicationStage || '—')}</span></div>
+        <div class="kv"><strong>Intervalo</strong>${renderCatalogValue(product.applicationInterval, 'A verificar')}</div>
         <div class="kv"><strong>Fuente</strong>${renderProductSource(product)}</div>
       </div>
       ${renderProductDocumentsSection(product)}

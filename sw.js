@@ -1,4 +1,4 @@
-const CACHE_NAME = 'cuaderno-tratamientos-v2-19-mapa-primero-cache';
+const CACHE_NAME = 'cuaderno-tratamientos-v2-20-catalogo-pendientes-cache';
 const CORE_ASSETS = [
   './',
   './index.html',
