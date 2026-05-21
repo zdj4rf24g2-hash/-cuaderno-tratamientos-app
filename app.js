@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const APP_VERSION = '2.16';
+  const APP_VERSION = '2.17';
   const SCHEMA_VERSION = '1.0.0';
   const DB_NAME = 'cuaderno-tratamientos-pwa-v1';
   const DB_STORE = 'state';
@@ -239,7 +239,7 @@
 
   function registerServiceWorker() {
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('sw.js?v=2.16', { updateViaCache: 'none' }).then(registration => registration.update()).catch(error => console.warn('SW no registrado', error));
+      navigator.serviceWorker.register('sw.js?v=2.17', { updateViaCache: 'none' }).then(registration => registration.update()).catch(error => console.warn('SW no registrado', error));
     }
   }
 
@@ -2060,6 +2060,7 @@
 
   function updateNewCatalogProductSuggestions(input) {
     const box = document.getElementById('newCatalogProductSuggestions');
+    const panel = document.querySelector('[data-new-product-panel]');
     if (!box) return;
     input.dataset.mapaSelectedId = '';
     input.dataset.mapaSelectedRegistration = '';
@@ -2068,12 +2069,15 @@
     if (query.length < 2) {
       box.innerHTML = '';
       box.classList.add('hidden');
+      if (panel) panel.classList.remove('search-active');
       return;
     }
     const matches = findMapaProductMatches(query).slice(0, 8);
     if (!matches.length) {
       box.innerHTML = '<div class="search-result"><strong>Sin coincidencias MAPA</strong><small>Puedes seguir escribiendo o crear el producto provisional.</small></div>';
       box.classList.remove('hidden');
+      if (panel) panel.classList.add('search-active');
+      requestAnimationFrame(() => input.scrollIntoView({ block: 'nearest' }));
       return;
     }
     box.innerHTML = matches.map(match => {
@@ -2085,11 +2089,14 @@
       return `<button type="button" class="search-result" data-modal-action="select-mapa-suggestion" data-mapa-id="${escapeAttr(String(idProducto))}" data-mapa-registration="${escapeAttr(String(registro))}" data-mapa-name="${escapeAttr(String(nombre))}"><strong>${escapeHtml(nombre)}</strong><small>Reg. ${escapeHtml(String(registro || '—'))} · ${escapeHtml(String(estado || '—'))}</small></button>`;
     }).join('');
     box.classList.remove('hidden');
+    if (panel) panel.classList.add('search-active');
+    requestAnimationFrame(() => input.scrollIntoView({ block: 'nearest' }));
   }
 
   function selectNewCatalogMapaSuggestion(btn) {
     const input = document.getElementById('newCatalogProductName');
     const box = document.getElementById('newCatalogProductSuggestions');
+    const panel = document.querySelector('[data-new-product-panel]');
     if (!input) return;
     input.value = btn.dataset.mapaName || '';
     input.dataset.mapaSelectedId = btn.dataset.mapaId || '';
@@ -2099,6 +2106,7 @@
       box.innerHTML = '';
       box.classList.add('hidden');
     }
+    if (panel) panel.classList.remove('search-active');
     input.focus({ preventScroll: true });
   }
 
@@ -2122,14 +2130,23 @@
   async function createCatalogProduct() {
     const mapaLoaded = Boolean(state.mapaBase?.products?.length);
     const body = `
-      <div class="field"><span>Nombre del producto</span><input id="newCatalogProductName" autocomplete="off" placeholder="Escribe el nombre comercial o nº de registro"></div>
-      ${mapaLoaded ? '<div id="newCatalogProductSuggestions" class="search-results hidden" aria-live="polite"></div>' : ''}
-      <p class="muted">${mapaLoaded ? 'A medida que escribas, la app sugerirá productos de la base MAPA reducida. Selecciona una sugerencia para evitar errores tipográficos. La ficha se creará con prerrelleno asistido y quedará como <strong>A verificar</strong>.' : 'Se añadirá al catálogo como <strong>A verificar</strong>. Después podrás completar su ficha.'}</p>
+      <div class="new-product-panel" data-new-product-panel>
+        <div class="new-product-search-area">
+          <div class="field new-product-name-field"><span>Nombre del producto</span><input id="newCatalogProductName" autocomplete="off" placeholder="Escribe el nombre comercial o nº de registro"></div>
+          ${mapaLoaded ? '<div id="newCatalogProductSuggestions" class="search-results mapa-suggestion-list hidden" aria-live="polite"></div>' : ''}
+        </div>
+        <p class="muted new-product-help">${mapaLoaded ? 'A medida que escribas, la app sugerirá productos de la base MAPA reducida. Selecciona una sugerencia para evitar errores tipográficos. La ficha se creará con prerrelleno asistido y quedará como <strong>A verificar</strong>.' : 'Se añadirá al catálogo como <strong>A verificar</strong>. Después podrás completar su ficha.'}</p>
+      </div>
     `;
-    const decision = await choiceDialog('Nuevo producto', body, [
+    const dialogPromise = choiceDialog('Nuevo producto', body, [
       { id: 'create', label: 'Crear producto', className: 'primary-btn' },
       { id: 'cancel', label: 'Cancelar', className: 'ghost-btn' }
     ], true);
+    requestAnimationFrame(() => {
+      const input = document.getElementById('newCatalogProductName');
+      if (input) input.scrollIntoView({ block: 'nearest' });
+    });
+    const decision = await dialogPromise;
     if (decision !== 'create') { els.modalHost.innerHTML = ''; return; }
     const input = document.getElementById('newCatalogProductName');
     const name = input?.value?.trim() || '';

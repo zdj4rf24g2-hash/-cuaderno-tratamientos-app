@@ -1,4 +1,4 @@
-const CACHE_NAME = 'cuaderno-tratamientos-v2-16-dosis-guiada-cache';
+const CACHE_NAME = 'cuaderno-tratamientos-v2-17-nuevo-producto-sugerencias-cache';
 const CORE_ASSETS = [
   './',
   './index.html',

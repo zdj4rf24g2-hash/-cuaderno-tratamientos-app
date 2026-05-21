@@ -1,0 +1,20 @@
+APP CUADERNO DE TRATAMIENTOS · V2.17
+
+Base de partida: APP_CUADERNO_TRATAMIENTOS_V2_16_COMPLETA_SIN_SUBCARPETAS.zip
+
+Cambio solicitado aplicado en V2.17:
+- Ajustado exclusivamente el modal Nuevo producto para que, al escribir con la Base MAPA reducida cargada, el campo de entrada permanezca visible y las sugerencias aparezcan justo debajo.
+- La lista de sugerencias MAPA queda limitada con scroll interno para evitar que el teclado del iPhone oculte el campo de escritura.
+- El texto explicativo se oculta mientras hay búsqueda activa para ganar espacio útil.
+
+Ajustes técnicos imprescindibles:
+- Añadidas clases CSS específicas del modal Nuevo producto.
+- Actualización de versión visible, APP_VERSION, service worker y CACHE_NAME a V2.17.
+
+No se han modificado catálogo, importación MAPA, cuaderno, tratamientos, alertas, colores, navegación ni datos base.
+
+Estado por defecto de la app pública:
+- Sin productos reales incrustados.
+- Sin tratamientos reales incrustados.
+- Sin alertas reales incrustadas.
+- Sin borradores reales incrustados.

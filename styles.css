@@ -430,3 +430,23 @@ html, body { width: 100%; max-width: 100%; overflow-x: hidden; }
 .edit-dose-validation-note { display: flex; align-items: center; gap: 6px; }
 .notice.compact { padding: 10px 12px; }
 .notice.compact p { margin: 3px 0 0; }
+
+/* V 2.17 · Nuevo producto: campo visible y sugerencias MAPA operativas en iPhone */
+.new-product-panel { display: grid; gap: 10px; }
+.new-product-search-area {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--surface);
+  padding-bottom: 8px;
+}
+.new-product-name-field { margin-top: 0; }
+.mapa-suggestion-list {
+  max-height: min(260px, 34vh);
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.new-product-panel.search-active .new-product-help { display: none; }
+@media (max-height: 680px) {
+  .mapa-suggestion-list { max-height: 210px; }
+}
