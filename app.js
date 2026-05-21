@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const APP_VERSION = '2.18';
+  const APP_VERSION = '2.19';
   const SCHEMA_VERSION = '1.0.0';
   const DB_NAME = 'cuaderno-tratamientos-pwa-v1';
   const DB_STORE = 'state';
@@ -241,7 +241,7 @@
 
   function registerServiceWorker() {
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('sw.js?v=2.18', { updateViaCache: 'none' }).then(registration => registration.update()).catch(error => console.warn('SW no registrado', error));
+      navigator.serviceWorker.register('sw.js?v=2.19', { updateViaCache: 'none' }).then(registration => registration.update()).catch(error => console.warn('SW no registrado', error));
     }
   }
 
@@ -2261,12 +2261,12 @@
         <p>Abre el formulario técnico completo para escribir o corregir cada campo.</p>
       </div>
       <div class="notice" style="margin-top:12px">
-        <strong>B) Completar desde documentación.</strong>
-        <p>Permite aportar fotos de envase, etiqueta o PDF. La app guardará la documentación en la ficha, intentará extraer datos con evidencia suficiente y mantendrá como <strong>A verificar</strong> lo dudoso o incompleto.</p>
+        <strong>B) Revisar datos MAPA con documentación complementaria.</strong>
+        <p>La base MAPA reducida es la fuente inicial. Permite aportar fotos de envase, etiqueta o PDF para completar, confirmar o corregir datos que sigan como <strong>A verificar</strong>.</p>
       </div>
     `, [
       { id: 'manual', label: 'A) Completar manualmente', className: 'secondary-btn' },
-      { id: 'documents', label: 'B) Completar desde documentación', className: 'primary-btn' },
+      { id: 'documents', label: 'B) Revisar datos MAPA', className: 'primary-btn' },
       { id: 'cancel', label: 'Cancelar', className: 'ghost-btn' }
     ]);
     if (decision === 'manual') return showEditProductModal(id);
@@ -2278,23 +2278,16 @@
     if (!product) return;
     const body = `
       <div class="notice">
-        <strong>Documentación técnica asociada.</strong>
-        <p>Se admiten imágenes y PDF. Las imágenes se optimizan localmente para mantener un formato legible y ligero. Los documentos quedarán guardados en la ficha del producto y en la copia completa JSON.</p>
+        <strong>Revisión y complemento de datos MAPA.</strong>
+        <p>La base MAPA reducida es la fuente inicial de la ficha. Añade documentación solo para confirmar, completar o corregir datos pendientes.</p>
       </div>
       <div class="notice extraction-guidance" style="margin-top:12px">
-        <strong>Flujo recomendado para mejorar la lectura.</strong>
-        <p>1) Foto de identificación/composición. 2) Foto nítida de la tabla de usos, dosis, volumen y P.S. 3) PDF o ficha técnica si existe. La app cruza la información y presenta una propuesta revisable antes de aplicar cambios.</p>
+        <strong>Documentación complementaria.</strong>
+        <p>Puedes aportar foto de envase, tabla de usos/dosis/volumen/P.S., ficha técnica o PDF. La app generará una propuesta revisable antes de aplicar cambios.</p>
       </div>
-      <div class="field"><span>Tipo de documentación principal</span><select id="productDocumentRole">${renderSimpleOptions([
-        ['mixed', 'Conjunto mixto: envase + tabla + PDF'],
-        ['identity', 'Identificación / composición'],
-        ['use_table', 'Tabla de usos, dosis, volumen y P.S.'],
-        ['technical_pdf', 'Ficha técnica / registro / PDF'],
-        ['other', 'Otro documento']
-      ], 'mixed')}</select></div>
-      <div class="field"><span>Fotos / PDF</span><input id="productDocumentFiles" type="file" accept=".pdf,application/pdf,image/*" multiple></div>
-      <div class="field"><span>Nota de fuente opcional</span><textarea id="productDocumentNote" placeholder="Ej.: etiqueta envase 2026, ficha técnica fabricante, registro oficial..."></textarea></div>
-      <p class="muted">La app ya no vuelca texto OCR bruto en la ficha. Primero genera una <strong>propuesta de extracción por campos</strong>; solo se aplicará tras revisión.</p>
+      <div class="field"><span>Fotos / PDF complementarios</span><input id="productDocumentFiles" type="file" accept=".pdf,application/pdf,image/*" multiple></div>
+      <div class="field"><span>Nota opcional</span><textarea id="productDocumentNote" placeholder="Ej.: etiqueta envase 2026, ficha técnica fabricante, registro oficial..."></textarea></div>
+      <p class="muted">Primero se mantienen los datos MAPA. La documentación añadida solo sirve para proponer cambios revisables campo a campo.</p>
     `;
     const decision = await choiceDialog(`Aportar documentación: ${product.name}`, body, [
       { id: 'analyze', label: 'Guardar y analizar', className: 'primary-btn' },
@@ -2303,7 +2296,7 @@
     if (decision !== 'analyze') { els.modalHost.innerHTML = ''; return; }
     const files = Array.from(document.getElementById('productDocumentFiles')?.files || []);
     const note = document.getElementById('productDocumentNote')?.value?.trim() || '';
-    const role = document.getElementById('productDocumentRole')?.value || 'mixed';
+    const role = 'mapa_complement';
     els.modalHost.innerHTML = '';
     if (!files.length) {
       toast('Selecciona al menos una imagen o PDF.');
