@@ -1,0 +1,19 @@
+APP CUADERNO DE TRATAMIENTOS · V2.21
+
+Base utilizada:
+- APP_CUADERNO_TRATAMIENTOS_V2_18_COMPLETA_SIN_SUBCARPETAS.zip
+
+Cambio solicitado aplicado en V2.21:
+- Se corrige el flujo de documentación de producto para dejar la Base MAPA reducida como fuente inicial/principal.
+- Se elimina la selección de “Tipo de documentación principal”.
+- La documentación aportada pasa a tratarse como complementaria para confirmar, completar o corregir datos MAPA.
+- Se mantiene la revisión campo a campo antes de aplicar cambios.
+
+Comprobaciones:
+- APP_VERSION actualizado a V2.21.
+- Versión visible actualizada a V2.21.
+- Service worker y CACHE_NAME actualizados a V2.21.
+- Estado inicial sin productos, tratamientos, alertas ni borradores reales incrustados.
+- ZIP final sin subcarpetas.
+
+No se ha modificado nada más fuera de esta corrección.

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'cuaderno-tratamientos-v2-20-catalogo-pendientes-cache';
+const CACHE_NAME = 'cuaderno-tratamientos-v2-21-paleta-encabezado-cache';
 const CORE_ASSETS = [
   './',
   './index.html',

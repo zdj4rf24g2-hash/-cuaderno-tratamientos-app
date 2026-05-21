@@ -34,13 +34,19 @@ button { cursor: pointer; }
   top: 0;
   z-index: 20;
   padding: 14px 16px 12px;
-  background: rgba(244, 247, 251, .97);
+  background: linear-gradient(180deg, #1f5f9b 0%, #134c84 100%);
   backdrop-filter: blur(16px);
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid rgba(255, 255, 255, .18);
 }
 .brand-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
-.eyebrow { margin: 0 0 4px; font-size: 11px; line-height: 1.2; letter-spacing: .08em; color: var(--muted); font-weight: 700; }
-h1 { margin: 0; font-size: 24px; line-height: 1.2; }
+.eyebrow { margin: 0 0 4px; font-size: 11px; line-height: 1.2; letter-spacing: .08em; color: rgba(255, 255, 255, .88); font-weight: 700; }
+h1 { margin: 0; font-size: 24px; line-height: 1.2; color: #ffffff; }
+.app-header .ghost-btn {
+  background: rgba(255, 255, 255, .08);
+  color: #ffffff;
+  border-color: rgba(255, 255, 255, .36);
+}
+.app-header .ghost-btn:hover { background: rgba(255, 255, 255, .14); }
 .global-search-wrap { display: block; margin-top: 12px; }
 .global-search-wrap input,
 .field input,
