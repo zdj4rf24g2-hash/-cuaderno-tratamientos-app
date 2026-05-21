@@ -420,3 +420,13 @@ html, body { width: 100%; max-width: 100%; overflow-x: hidden; }
     grid-template-columns: minmax(0, 1.65fr) minmax(0, 1fr) minmax(0, 1.05fr) minmax(0, 1.15fr);
   }
 }
+
+/* V2.16: edición guiada de dosis en ficha de producto */
+.edit-dose-editor { display: grid; gap: 12px; }
+.edit-dose-editor h3 { margin: 0; font-size: 18px; line-height: 1.25; color: var(--ink); }
+.edit-dose-choice-list .dose-choice-card { align-items: center; padding: 12px 14px; }
+.edit-dose-choice-list .dose-choice-card strong { margin-bottom: 0; font-size: 15px; }
+.edit-dose-panel { display: grid; gap: 10px; }
+.edit-dose-validation-note { display: flex; align-items: center; gap: 6px; }
+.notice.compact { padding: 10px 12px; }
+.notice.compact p { margin: 3px 0 0; }

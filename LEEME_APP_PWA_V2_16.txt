@@ -1,0 +1,22 @@
+APP CUADERNO DE TRATAMIENTOS · V2.16
+
+Base de trabajo:
+- Generada a partir de APP_CUADERNO_TRATAMIENTOS_V2_15_COMPLETA_SIN_SUBCARPETAS.zip.
+
+Cambio solicitado aplicado en V2.16:
+- Simplificado el bloque de dosis en la edición de ficha de producto.
+- Sustituido el bloque técnico anterior por una edición guiada con cuatro opciones:
+  A. Dosis única por hectárea.
+  B. Rango mínimo-máximo por hectárea.
+  C. Concentración + límite por hectárea.
+  D. No consta / dejar a verificar.
+- Según la opción elegida, la app muestra únicamente los campos necesarios.
+- Añadida línea informativa de regla de validación resultante.
+
+Ajustes técnicos estrictamente necesarios:
+- Lectura y construcción interna de doseRule adaptada al nuevo bloque guiado.
+- Sincronización visual de opciones y paneles dentro del modal de edición de ficha.
+- Actualización de versión visible, APP_VERSION, service worker y CACHE_NAME a V2.16.
+
+No se han añadido productos, tratamientos ni datos reales incrustados.
+No se ha modificado ningún otro bloque funcional fuera del cambio solicitado.

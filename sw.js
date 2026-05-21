@@ -1,4 +1,4 @@
-const CACHE_NAME = 'cuaderno-tratamientos-v2-14-mapa-catalogo-boton-cache';
+const CACHE_NAME = 'cuaderno-tratamientos-v2-16-dosis-guiada-cache';
 const CORE_ASSETS = [
   './',
   './index.html',

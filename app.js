@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const APP_VERSION = '2.14';
+  const APP_VERSION = '2.16';
   const SCHEMA_VERSION = '1.0.0';
   const DB_NAME = 'cuaderno-tratamientos-pwa-v1';
   const DB_STORE = 'state';
@@ -135,6 +135,7 @@
     els.screen.addEventListener('input', handleScreenInput);
     els.screen.addEventListener('change', handleScreenChange);
     els.modalHost.addEventListener('click', handleModalHostClick);
+    els.modalHost.addEventListener('input', handleModalHostInput);
     els.modalHost.addEventListener('change', handleModalHostChange);
   }
 
@@ -238,7 +239,7 @@
 
   function registerServiceWorker() {
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('sw.js?v=2.13', { updateViaCache: 'none' }).then(registration => registration.update()).catch(error => console.warn('SW no registrado', error));
+      navigator.serviceWorker.register('sw.js?v=2.16', { updateViaCache: 'none' }).then(registration => registration.update()).catch(error => console.warn('SW no registrado', error));
     }
   }
 
@@ -1019,6 +1020,7 @@
     const btn = event.target.closest('[data-modal-action]');
     if (!btn) return;
     const action = btn.dataset.modalAction;
+    if (action === 'select-mapa-suggestion') return selectNewCatalogMapaSuggestion(btn);
     if (action === 'view-product-doc') return showProductDocumentViewer(btn.dataset.productId, btn.dataset.docId);
     if (action === 'zoom-product-doc-image') return showProductImageZoomViewer(btn.dataset.productId, btn.dataset.docId);
     if (action === 'delete-product-doc') return deleteProductDocument(btn.dataset.productId, btn.dataset.docId);
@@ -1028,9 +1030,16 @@
     }
   }
 
+  function handleModalHostInput(event) {
+    if (event.target?.id === 'newCatalogProductName') return updateNewCatalogProductSuggestions(event.target);
+  }
+
   function handleModalHostChange(event) {
     if (event.target.matches('[data-dose-ui-mode], [data-dose-fixed-unit], [data-dose-range-unit], [data-dose-concentration-kind], [data-dose-concentration-unit]')) {
       return syncReviewDoseRulePanels(event.target.closest('[data-dose-review-editor]'));
+    }
+    if (event.target.matches('[data-edit-dose-ui-mode], [data-edit-dose-unit]')) {
+      return syncEditProductDosePanels(event.target.closest('[data-edit-dose-editor]'));
     }
     if (event.target.matches('[data-volume-ui-mode]')) {
       return syncReviewVolumeReferencePanels(event.target.closest('[data-review-volume-editor="volumeReference"]'));
@@ -2049,18 +2058,81 @@
     };
   }
 
+  function updateNewCatalogProductSuggestions(input) {
+    const box = document.getElementById('newCatalogProductSuggestions');
+    if (!box) return;
+    input.dataset.mapaSelectedId = '';
+    input.dataset.mapaSelectedRegistration = '';
+    input.dataset.mapaSelectedName = '';
+    const query = input.value.trim();
+    if (query.length < 2) {
+      box.innerHTML = '';
+      box.classList.add('hidden');
+      return;
+    }
+    const matches = findMapaProductMatches(query).slice(0, 8);
+    if (!matches.length) {
+      box.innerHTML = '<div class="search-result"><strong>Sin coincidencias MAPA</strong><small>Puedes seguir escribiendo o crear el producto provisional.</small></div>';
+      box.classList.remove('hidden');
+      return;
+    }
+    box.innerHTML = matches.map(match => {
+      const datos = match.product.DATOSPRODUCTO || {};
+      const idProducto = datos.IdProducto ?? '';
+      const nombre = datos.Nombre || 'Producto MAPA';
+      const registro = datos.Num_Registro || '';
+      const estado = datos.Estado || '—';
+      return `<button type="button" class="search-result" data-modal-action="select-mapa-suggestion" data-mapa-id="${escapeAttr(String(idProducto))}" data-mapa-registration="${escapeAttr(String(registro))}" data-mapa-name="${escapeAttr(String(nombre))}"><strong>${escapeHtml(nombre)}</strong><small>Reg. ${escapeHtml(String(registro || '—'))} · ${escapeHtml(String(estado || '—'))}</small></button>`;
+    }).join('');
+    box.classList.remove('hidden');
+  }
+
+  function selectNewCatalogMapaSuggestion(btn) {
+    const input = document.getElementById('newCatalogProductName');
+    const box = document.getElementById('newCatalogProductSuggestions');
+    if (!input) return;
+    input.value = btn.dataset.mapaName || '';
+    input.dataset.mapaSelectedId = btn.dataset.mapaId || '';
+    input.dataset.mapaSelectedRegistration = btn.dataset.mapaRegistration || '';
+    input.dataset.mapaSelectedName = btn.dataset.mapaName || '';
+    if (box) {
+      box.innerHTML = '';
+      box.classList.add('hidden');
+    }
+    input.focus({ preventScroll: true });
+  }
+
+  function getSelectedNewCatalogMapaProduct(input) {
+    if (!input || !state.mapaBase?.products?.length) return null;
+    const selectedName = input.dataset.mapaSelectedName || '';
+    const currentName = input.value.trim();
+    if (!selectedName || normalizeText(currentName) !== normalizeText(selectedName)) return null;
+    const selectedId = input.dataset.mapaSelectedId || '';
+    const selectedRegistration = input.dataset.mapaSelectedRegistration || '';
+    return state.mapaBase.products.find(product => {
+      const datos = product.DATOSPRODUCTO || {};
+      const id = String(datos.IdProducto ?? '');
+      const registration = String(datos.Num_Registro ?? '');
+      const name = String(datos.Nombre ?? '');
+      if (selectedId && id === selectedId) return true;
+      return normalizeText(registration) === normalizeText(selectedRegistration) && normalizeText(name) === normalizeText(selectedName);
+    }) || null;
+  }
+
   async function createCatalogProduct() {
     const mapaLoaded = Boolean(state.mapaBase?.products?.length);
     const body = `
       <div class="field"><span>Nombre del producto</span><input id="newCatalogProductName" autocomplete="off" placeholder="Escribe el nombre comercial o nº de registro"></div>
-      <p class="muted">${mapaLoaded ? 'Si existe coincidencia en la base MAPA reducida, se creará la ficha con prerrelleno asistido y quedará como <strong>A verificar</strong>.' : 'Se añadirá al catálogo como <strong>A verificar</strong>. Después podrás completar su ficha.'}</p>
+      ${mapaLoaded ? '<div id="newCatalogProductSuggestions" class="search-results hidden" aria-live="polite"></div>' : ''}
+      <p class="muted">${mapaLoaded ? 'A medida que escribas, la app sugerirá productos de la base MAPA reducida. Selecciona una sugerencia para evitar errores tipográficos. La ficha se creará con prerrelleno asistido y quedará como <strong>A verificar</strong>.' : 'Se añadirá al catálogo como <strong>A verificar</strong>. Después podrás completar su ficha.'}</p>
     `;
     const decision = await choiceDialog('Nuevo producto', body, [
       { id: 'create', label: 'Crear producto', className: 'primary-btn' },
       { id: 'cancel', label: 'Cancelar', className: 'ghost-btn' }
     ], true);
     if (decision !== 'create') { els.modalHost.innerHTML = ''; return; }
-    const name = document.getElementById('newCatalogProductName')?.value?.trim() || '';
+    const input = document.getElementById('newCatalogProductName');
+    const name = input?.value?.trim() || '';
     if (!name) {
       toast('Indica el nombre del producto.');
       return createCatalogProduct();
@@ -2069,7 +2141,8 @@
       toast('Ese producto ya existe en el catálogo.');
       return createCatalogProduct();
     }
-    const product = await createProductFromInputWithMapa(name, '', '', false);
+    const selectedMapaProduct = getSelectedNewCatalogMapaProduct(input);
+    const product = selectedMapaProduct ? createProductFromMapa(selectedMapaProduct, name, '', '') : await createProductFromInputWithMapa(name, '', '', false);
     if (!product) return;
     const existingByName = findProductByName(product.name);
     const existingByRegistration = product.registration && product.registration !== 'A verificar' ? findProductByRegistration(product.registration) : null;
@@ -2199,6 +2272,187 @@
     return processProductDocuments(product, files, note, role);
   }
 
+
+  function renderEditProductDoseEditor(doseRule) {
+    const preset = normalizeDoseEditPreset(doseRule || { mode: 'pending' });
+    const selectedLabel = editDoseModeLabel(preset.uiMode);
+    return `
+      <hr class="separator">
+      <div class="edit-dose-editor" data-edit-dose-editor>
+        <h3>¿Cómo viene expresada la dosis?</h3>
+        <input type="hidden" id="editProductDoseMode" value="${escapeAttr(preset.uiMode)}">
+        <div class="dose-choice-list edit-dose-choice-list">
+          <label class="dose-choice-card ${preset.uiMode === 'fixed' ? 'selected' : ''}">
+            <input type="radio" name="editDoseUiMode" data-edit-dose-ui-mode value="fixed" ${preset.uiMode === 'fixed' ? 'checked' : ''}>
+            <div><strong>A. Dosis única por hectárea</strong></div>
+          </label>
+          <label class="dose-choice-card ${preset.uiMode === 'range' ? 'selected' : ''}">
+            <input type="radio" name="editDoseUiMode" data-edit-dose-ui-mode value="range" ${preset.uiMode === 'range' ? 'checked' : ''}>
+            <div><strong>B. Rango mínimo-máximo por hectárea</strong></div>
+          </label>
+          <label class="dose-choice-card ${preset.uiMode === 'concentration' ? 'selected' : ''}">
+            <input type="radio" name="editDoseUiMode" data-edit-dose-ui-mode value="concentration" ${preset.uiMode === 'concentration' ? 'checked' : ''}>
+            <div><strong>C. Concentración + límite por hectárea</strong></div>
+          </label>
+          <label class="dose-choice-card ${preset.uiMode === 'pending' ? 'selected' : ''}">
+            <input type="radio" name="editDoseUiMode" data-edit-dose-ui-mode value="pending" ${preset.uiMode === 'pending' ? 'checked' : ''}>
+            <div><strong>D. No consta / dejar a verificar</strong></div>
+          </label>
+        </div>
+
+        <section class="edit-dose-panel ${preset.uiMode === 'fixed' ? '' : 'hidden'}" data-edit-dose-panel="fixed">
+          <div class="inline-fields two">
+            <div class="field"><span>Valor dosis</span><input id="editDoseFixedValue" value="${escapeAttr(ruleInputValue(preset.fixedValue))}" inputmode="decimal" placeholder="Ej. 3"></div>
+            <div class="field"><span>Unidad</span><select id="editDoseFixedUnit" data-edit-dose-unit>${renderSimpleOptions([
+              ['kg/ha','kg/ha'], ['L/ha','L/ha'], ['g/ha','g/ha'], ['cc/ha','cc/ha']
+            ], preset.fixedUnit || 'kg/ha')}</select></div>
+          </div>
+        </section>
+
+        <section class="edit-dose-panel ${preset.uiMode === 'range' ? '' : 'hidden'}" data-edit-dose-panel="range">
+          <div class="inline-fields two">
+            <div class="field"><span>Dosis mínima</span><input id="editDoseRangeMin" value="${escapeAttr(ruleInputValue(preset.rangeMin))}" inputmode="decimal" placeholder="Ej. 1"></div>
+            <div class="field"><span>Dosis máxima</span><input id="editDoseRangeMax" value="${escapeAttr(ruleInputValue(preset.rangeMax))}" inputmode="decimal" placeholder="Ej. 2"></div>
+          </div>
+          <div class="field"><span>Unidad</span><select id="editDoseRangeUnit" data-edit-dose-unit>${renderSimpleOptions([
+            ['kg/ha','kg/ha'], ['L/ha','L/ha'], ['g/ha','g/ha'], ['cc/ha','cc/ha']
+          ], preset.rangeUnit || 'kg/ha')}</select></div>
+        </section>
+
+        <section class="edit-dose-panel ${preset.uiMode === 'concentration' ? '' : 'hidden'}" data-edit-dose-panel="concentration">
+          <div class="inline-fields two">
+            <div class="field"><span>Concentración mínima</span><input id="editDoseConcentrationMin" value="${escapeAttr(ruleInputValue(preset.concentrationMin))}" inputmode="decimal" placeholder="Ej. 250"></div>
+            <div class="field"><span>Concentración máxima</span><input id="editDoseConcentrationMax" value="${escapeAttr(ruleInputValue(preset.concentrationMax))}" inputmode="decimal" placeholder="Ej. 300"></div>
+          </div>
+          <div class="inline-fields two">
+            <div class="field"><span>Unidad concentración</span><select id="editDoseConcentrationUnit" data-edit-dose-unit>${renderSimpleOptions([
+              ['%','%'], ['g/hL','g/hL'], ['cc/hL','cc/hL']
+            ], preset.concentrationUnit || '%')}</select></div>
+            <div class="field"><span>Límite por ha</span><input id="editDoseConcentrationLimit" value="${escapeAttr(ruleInputValue(preset.perHaLimit))}" inputmode="decimal" placeholder="Si consta"></div>
+          </div>
+          <div class="field"><span>Unidad límite</span><select id="editDoseConcentrationLimitUnit" data-edit-dose-unit>${renderSimpleOptions([
+            ['kg/ha','kg/ha'], ['L/ha','L/ha']
+          ], preset.perHaLimitUnit || 'kg/ha')}</select></div>
+        </section>
+
+        <section class="edit-dose-panel ${preset.uiMode === 'pending' ? '' : 'hidden'}" data-edit-dose-panel="pending">
+          <div class="notice compact"><strong>Dosis pendiente de revisión.</strong><p>No se completan campos internos de validación.</p></div>
+        </section>
+
+        <div class="dose-review-note edit-dose-validation-note"><span>Regla de validación: </span><strong data-edit-dose-rule-label>${escapeHtml(selectedLabel)}</strong></div>
+      </div>
+    `;
+  }
+
+  function normalizeDoseEditPreset(rule) {
+    const base = {
+      uiMode: 'pending',
+      fixedValue: '',
+      fixedUnit: 'kg/ha',
+      rangeMin: '',
+      rangeMax: '',
+      rangeUnit: 'kg/ha',
+      concentrationMin: '',
+      concentrationMax: '',
+      concentrationUnit: '%',
+      perHaLimit: '',
+      perHaLimitUnit: 'kg/ha'
+    };
+    if (!rule || typeof rule !== 'object') return base;
+    if (rule.mode === 'fixed') {
+      base.uiMode = 'fixed';
+      base.fixedValue = ruleInputValue(rule.value);
+      base.fixedUnit = rule.displayUnit || rule.expectedAppliedUnit || 'kg/ha';
+      return base;
+    }
+    if (rule.mode === 'range') {
+      base.uiMode = 'range';
+      base.rangeMin = ruleInputValue(rule.min);
+      base.rangeMax = ruleInputValue(rule.max);
+      base.rangeUnit = rule.displayUnit || rule.expectedAppliedUnit || 'kg/ha';
+      return base;
+    }
+    if (String(rule.mode || '').startsWith('concentration')) {
+      base.uiMode = 'concentration';
+      base.concentrationUnit = rule.displayUnit || '%';
+      base.concentrationMin = ruleInputValue(Number.isFinite(rule.min) ? rule.min : rule.value);
+      base.concentrationMax = ruleInputValue(Number.isFinite(rule.max) ? rule.max : rule.value);
+      base.perHaLimit = ruleInputValue(rule.perHaLimit);
+      base.perHaLimitUnit = rule.perHaLimitUnit || 'kg/ha';
+      return base;
+    }
+    return base;
+  }
+
+  function editDoseModeLabel(mode) {
+    if (mode === 'fixed') return 'Dosis única por ha';
+    if (mode === 'range') return 'Rango mínimo-máximo por ha';
+    if (mode === 'concentration') return 'Concentración + límite por ha';
+    return 'A verificar';
+  }
+
+  function syncEditProductDosePanels(root) {
+    if (!root) return;
+    const mode = root.querySelector('[data-edit-dose-ui-mode]:checked')?.value || 'pending';
+    const hidden = root.querySelector('#editProductDoseMode');
+    if (hidden) hidden.value = mode;
+    root.querySelectorAll('.dose-choice-card').forEach(card => {
+      const input = card.querySelector('[data-edit-dose-ui-mode]');
+      card.classList.toggle('selected', !!input?.checked);
+    });
+    root.querySelectorAll('[data-edit-dose-panel]').forEach(panel => {
+      panel.classList.toggle('hidden', panel.dataset.editDosePanel !== mode);
+    });
+    const label = root.querySelector('[data-edit-dose-rule-label]');
+    if (label) label.textContent = editDoseModeLabel(mode);
+  }
+
+  function readEditProductDosePayload() {
+    const root = document.querySelector('[data-edit-dose-editor]');
+    if (!root) return { mode: 'pending' };
+    const mode = root.querySelector('[data-edit-dose-ui-mode]:checked')?.value || 'pending';
+    const value = id => document.getElementById(id)?.value?.trim() || '';
+    const number = id => {
+      const raw = value(id);
+      if (!raw) return null;
+      const parsed = Number(raw.replace(',', '.'));
+      return Number.isFinite(parsed) ? parsed : NaN;
+    };
+    if (mode === 'fixed') {
+      const unit = value('editDoseFixedUnit') || 'kg/ha';
+      return buildDoseRuleFromEdit({
+        mode: 'fixed',
+        displayUnit: unit,
+        expectedAppliedUnit: unit,
+        value: number('editDoseFixedValue')
+      });
+    }
+    if (mode === 'range') {
+      const unit = value('editDoseRangeUnit') || 'kg/ha';
+      return buildDoseRuleFromEdit({
+        mode: 'range',
+        displayUnit: unit,
+        expectedAppliedUnit: unit,
+        min: number('editDoseRangeMin'),
+        max: number('editDoseRangeMax')
+      });
+    }
+    if (mode === 'concentration') {
+      const unit = value('editDoseConcentrationUnit') || '%';
+      const modeKey = unit === '%' ? 'concentration_range_with_ha_limit' : 'concentration_hl_range_with_ha_limit';
+      return buildDoseRuleFromEdit({
+        mode: modeKey,
+        displayUnit: unit,
+        expectedAppliedUnit: unit,
+        min: number('editDoseConcentrationMin'),
+        max: number('editDoseConcentrationMax'),
+        perHaLimit: number('editDoseConcentrationLimit'),
+        perHaLimitUnit: value('editDoseConcentrationLimitUnit') || 'kg/ha'
+      });
+    }
+    return { mode: 'pending' };
+  }
+
   async function showEditProductModal(id) {
     const product = findProduct(id);
     if (!product) return;
@@ -2220,29 +2474,7 @@
         ], product.verificationStatus || 'PENDING')}</select></div>
       </div>
       <div class="field"><span>Dosis recomendada</span><textarea id="editProductDoseReference" placeholder="Texto visible en cuaderno">${escapeHtml(product.doseReference || '')}</textarea></div>
-      <div class="field"><span>Tipo de regla de dosis para validación</span><select id="editProductDoseMode">${renderSimpleOptions([
-        ['pending', 'A verificar'],
-        ['fixed', 'Dosis única por ha'],
-        ['range', 'Rango mínimo–máximo por ha'],
-        ['concentration_range_with_ha_limit', 'Rango % + límite por ha'],
-        ['concentration_hl_range_with_ha_limit', 'Rango g/hL o cc/hL + límite por ha'],
-        ['concentration_fixed_with_ha_limit', 'Concentración % única + límite por ha'],
-        ['concentration_hl_range', 'Rango g/hL o cc/hL sin límite por ha']
-      ], doseRule.mode || 'pending')}</select></div>
-      <div class="inline-fields two">
-        <div class="field"><span>Unidad visible dosis</span><input id="editDoseDisplayUnit" value="${escapeAttr(doseRule.displayUnit || '')}" placeholder="kg/ha, %, g/hL, cc/hL..."></div>
-        <div class="field"><span>Unidad esperada aplicada</span><input id="editDoseExpectedAppliedUnit" value="${escapeAttr(doseRule.expectedAppliedUnit || '')}" placeholder="kg/ha, cc/ha, g/hL..."></div>
-      </div>
-      <div class="inline-fields two">
-        <div class="field"><span>Valor único dosis</span><input id="editDoseValue" value="${escapeAttr(ruleInputValue(doseRule.value))}" inputmode="decimal" placeholder="Solo modos de valor único"></div>
-        <div class="field"><span>Mínimo dosis</span><input id="editDoseMin" value="${escapeAttr(ruleInputValue(doseRule.min))}" inputmode="decimal" placeholder="Solo modos con rango"></div>
-      </div>
-      <div class="inline-fields two">
-        <div class="field"><span>Máximo dosis</span><input id="editDoseMax" value="${escapeAttr(ruleInputValue(doseRule.max))}" inputmode="decimal" placeholder="Solo modos con rango"></div>
-        <div class="field"><span>Límite por ha</span><input id="editDosePerHaLimit" value="${escapeAttr(ruleInputValue(doseRule.perHaLimit))}" inputmode="decimal" placeholder="Si la etiqueta lo fija"></div>
-      </div>
-      <div class="field"><span>Unidad límite por ha</span><input id="editDosePerHaLimitUnit" value="${escapeAttr(doseRule.perHaLimitUnit || '')}" placeholder="kg/ha o L/ha"></div>
-      <hr class="separator">
+      ${renderEditProductDoseEditor(doseRule)}
       ${renderEditProductVolumeEditor(product, volumeRule)}
       <div class="inline-fields two">
         <div class="field"><span>Cultivo / usos autorizados</span><textarea id="editProductAllowedUses" placeholder="Uno por línea">${escapeHtml((product.allowedUses || []).join('\n'))}</textarea></div>
@@ -2268,8 +2500,8 @@
       <div class="field"><span>Fuente / referencia documental</span><textarea id="editProductSource" placeholder="Etiqueta, registro oficial, ficha técnica...">${escapeHtml(cleanProductSourceBase(product.source || ''))}</textarea></div>
       <p class="muted">Al guardar una ficha verificada, la app actualizará automáticamente en el cuaderno solo los campos técnicos que estén “A verificar” y resolverá las alertas técnicas que ya no procedan.</p>
     `;
-    const decision = await choiceDialog(`Editar ficha: ${product.name}`, body, [
-      { id: 'save', label: 'Guardar ficha', className: 'primary-btn' },
+    const decision = await choiceDialog('Editar producto', body, [
+      { id: 'save', label: 'Guardar', className: 'primary-btn' },
       { id: 'cancel', label: 'Cancelar', className: 'ghost-btn' }
     ], true);
     if (decision !== 'save') { els.modalHost.innerHTML = ''; return; }
@@ -2292,22 +2524,12 @@
   function readProductEditPayload(product) {
     const read = id => document.getElementById(id)?.value?.trim() ?? '';
     const verificationStatus = read('editProductVerificationStatus') || product.verificationStatus || 'PENDING';
-    const doseMode = read('editProductDoseMode') || 'pending';
     const editVolume = readEditProductVolumePayload();
     return {
       registration: read('editProductRegistration'),
       verificationStatus,
       doseReference: read('editProductDoseReference'),
-      doseRule: buildDoseRuleFromEdit({
-        mode: doseMode,
-        displayUnit: read('editDoseDisplayUnit'),
-        expectedAppliedUnit: read('editDoseExpectedAppliedUnit'),
-        value: readNumericEdit('editDoseValue'),
-        min: readNumericEdit('editDoseMin'),
-        max: readNumericEdit('editDoseMax'),
-        perHaLimit: readNumericEdit('editDosePerHaLimit'),
-        perHaLimitUnit: read('editDosePerHaLimitUnit')
-      }),
+      doseRule: readEditProductDosePayload(),
       volumeReference: editVolume.reference,
       volumeRule: editVolume.rule,
       allowedUses: parseLinesInput(read('editProductAllowedUses')),
