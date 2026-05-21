@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const APP_VERSION = '2.10';
+  const APP_VERSION = '2.12';
   const SCHEMA_VERSION = '1.0.0';
   const DB_NAME = 'cuaderno-tratamientos-pwa-v1';
   const DB_STORE = 'state';
@@ -162,7 +162,8 @@
         imports: [],
         restores: [],
         exports: []
-      }
+      },
+      mapaBase: null
     };
   }
 
@@ -224,6 +225,7 @@
     state.treatments ||= [];
     state.alerts ||= [];
     state.drafts ||= [];
+    if (state.mapaBase && (!Array.isArray(state.mapaBase.products) || !state.mapaBase.meta)) state.mapaBase = null;
     state.history ||= { imports: [], restores: [], exports: [] };
     state.history.imports ||= [];
     state.history.restores ||= [];
@@ -236,7 +238,7 @@
 
   function registerServiceWorker() {
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('sw.js?v=2.10', { updateViaCache: 'none' }).then(registration => registration.update()).catch(error => console.warn('SW no registrado', error));
+      navigator.serviceWorker.register('sw.js?v=2.12', { updateViaCache: 'none' }).then(registration => registration.update()).catch(error => console.warn('SW no registrado', error));
     }
   }
 
@@ -775,12 +777,8 @@
           <span class="tag ${product.verificationStatus === 'VERIFIED' ? 'ok' : 'pending'}">${product.verificationStatus === 'VERIFIED' ? 'Verificado' : 'A verificar'}</span>
         </div>
         <div class="kv-grid">
-          <div class="kv"><strong>Registro</strong><span>${escapeHtml(product.registration || '—')}</span></div>
-          <div class="kv"><strong>Estado</strong><span>${escapeHtml(product.verificationStatus || '—')}</span></div>
           <div class="kv"><strong>Dosis</strong><span>${escapeHtml(product.doseReference || '—')}</span></div>
-          <div class="kv"><strong>Regla dosis</strong><span>${escapeHtml(product.doseRule?.mode || 'pending')}</span></div>
           <div class="kv"><strong>Volumen caldo</strong><span>${escapeHtml(product.volumeReference || '—')}</span></div>
-          <div class="kv"><strong>Regla volumen</strong><span>${escapeHtml(product.volumeRule?.mode || 'pending')}</span></div>
           <div class="kv"><strong>P.S.</strong><span>${escapeHtml(product.safetyPeriod || '—')}</span></div>
           <div class="kv"><strong>Máx. campaña</strong><span>${escapeHtml(String(product.maxApplications ?? 'NO CONSTA'))}</span></div>
           <div class="kv"><strong>Principios activos</strong><span>${escapeHtml(product.activeIngredients || '—')}</span></div>
@@ -788,9 +786,7 @@
           <div class="kv"><strong>Usos autorizados</strong><span>${escapeHtml(renderInlineList(product.allowedUses, '—'))}</span></div>
           <div class="kv"><strong>Objetivos</strong><span>${escapeHtml(renderInlineList(product.allowedObjectives, '—'))}</span></div>
           <div class="kv"><strong>Intervalo</strong><span>${escapeHtml(product.applicationInterval || '—')}</span></div>
-          <div class="kv"><strong>Estadio / condiciones</strong><span>${escapeHtml(product.applicationStage || '—')}</span></div>
           <div class="kv"><strong>Docs</strong><span>${(product.documents || []).length}</span></div>
-          <div class="kv"><strong>Fuente</strong>${renderProductSource(product)}</div>
         </div>
         <div class="button-row" style="margin-top:12px">
           <button class="ghost-btn" data-action="view-product" data-id="${escapeAttr(product.id)}">Ver ficha</button>
@@ -858,11 +854,39 @@
     const preview = ui.importPreview;
     return `
       ${renderBackToMore('Importación', 'Carga inicial estructurada, CSV, XLS compatible y JSON.')}
+      ${renderMapaBaseSection()}
       <section class="section-card">
         <label class="primary-btn" style="display:block;text-align:center">Seleccionar archivo<input id="importFile" type="file" accept=".json,.csv,.xls,.xlsx,application/json,text/csv,application/vnd.ms-excel" class="hidden" data-action-change="import-file"></label>
         <p class="muted">La carga privada de tratamientos debe importarse localmente. La app pública no la contiene.</p>
       </section>
       ${preview ? renderImportPreview(preview) : ''}
+    `;
+  }
+
+  function renderMapaBaseSection() {
+    const mapa = state.mapaBase;
+    const loaded = Boolean(mapa?.products?.length);
+    const sourceDate = loaded ? formatMapaDate(mapa.meta?.sourceDate) : '—';
+    const productCount = loaded ? String(mapa.meta?.productCount ?? mapa.products.length) : '0';
+    const useCount = loaded ? String(mapa.meta?.useCount ?? countMapaUses(mapa.products)) : '0';
+    const fileName = loaded ? (mapa.meta?.fileName || 'Base MAPA reducida') : 'No cargada';
+    return `
+      <section class="section-card">
+        <div class="section-header">
+          <div><h2>Base MAPA reducida</h2><p>Búsqueda y prerrelleno asistido de fichas de producto.</p></div>
+          <span class="tag ${loaded ? 'ok' : 'pending'}">${loaded ? 'Cargada' : 'No cargada'}</span>
+        </div>
+        <div class="kv-grid">
+          <div class="kv"><strong>Fecha MAPA</strong><span>${escapeHtml(sourceDate)}</span></div>
+          <div class="kv"><strong>Productos</strong><span>${escapeHtml(productCount)}</span></div>
+          <div class="kv"><strong>Usos vid</strong><span>${escapeHtml(useCount)}</span></div>
+          <div class="kv"><strong>Fichero</strong><span>${escapeHtml(fileName)}</span></div>
+        </div>
+        <div class="button-row" style="margin-top:12px">
+          <label class="secondary-btn" style="display:block;text-align:center">Cargar base MAPA reducida<input id="mapaFile" type="file" accept=".json,.zip,application/json,application/zip" class="hidden" data-action-change="mapa-file"></label>
+        </div>
+        <p class="muted">La base se guarda localmente en este dispositivo. Si se carga una base más reciente, sustituye a la anterior.</p>
+      </section>
     `;
   }
 
@@ -1008,6 +1032,7 @@
   function handleScreenChange(event) {
     const changeAction = event.target.dataset.actionChange;
     if (changeAction === 'import-file') return readImportFile(event.target.files?.[0]);
+    if (changeAction === 'mapa-file') return readMapaBaseFile(event.target.files?.[0]);
     if (changeAction === 'restore-file') return readRestoreFile(event.target.files?.[0]);
     const pendingField = event.target.dataset.pendingField;
     const draftField = event.target.dataset.draftField;
@@ -1173,9 +1198,9 @@
 
     let product = findProductByName(p.productName);
     if (!product) {
-      const ok = await confirmDialog('Producto provisional', 'No existe en el catálogo. Se creará como A verificar.', 'Crear provisional', 'Cancelar');
-      if (!ok) return;
-      product = createProvisionalProduct(p.productName, p.crop, p.objective);
+      const created = await createProductFromInputWithMapa(p.productName, p.crop, p.objective, true);
+      if (!created) return;
+      product = created;
       state.products.push(product);
     }
 
@@ -1348,6 +1373,239 @@
       createdAt: now,
       updatedAt: now
     };
+  }
+
+
+  async function createProductFromInputWithMapa(name, crop, objective, confirmProvisional) {
+    const matches = findMapaProductMatches(name);
+    let chosen = null;
+    let provisionalChosen = false;
+    if (matches.length) {
+      chosen = await chooseMapaProductMatch(name, matches);
+      if (chosen === 'PROVISIONAL') { chosen = null; provisionalChosen = true; }
+      else if (!chosen) return null;
+    }
+    if (chosen) return createProductFromMapa(chosen, name, crop, objective);
+    if (confirmProvisional && !provisionalChosen) {
+      const ok = await confirmDialog('Producto provisional', 'No existe en el catálogo ni se ha seleccionado coincidencia MAPA. Se creará como A verificar.', 'Crear provisional', 'Cancelar');
+      if (!ok) return null;
+    }
+    return createProvisionalProduct(name, crop, objective);
+  }
+
+  function createProductFromMapa(mapaProduct, fallbackName, crop, objective) {
+    const now = new Date().toISOString();
+    const datos = mapaProduct.DATOSPRODUCTO || {};
+    const usos = Array.isArray(mapaProduct.USOS) ? mapaProduct.USOS : [];
+    const sourceDate = state.mapaBase?.meta?.sourceDate || '';
+    const product = {
+      id: `p_${cryptoRandom()}`,
+      name: String(datos.Nombre || fallbackName || '').trim(),
+      registration: String(datos.Num_Registro || 'A verificar').trim() || 'A verificar',
+      verificationStatus: 'PENDING',
+      doseReference: summarizeMapaValues(usos.map(formatMapaDoseReference), 'A verificar'),
+      doseRule: { mode: 'pending' },
+      volumeReference: summarizeMapaValues(usos.map(formatMapaVolumeReference), 'A verificar'),
+      volumeRule: { mode: 'pending' },
+      safetyPeriod: summarizeMapaValues(usos.map(use => normalizeMapaFieldText(use['Plazo Seguridad'])), 'A verificar'),
+      maxApplications: summarizeMapaMaxApplications(usos),
+      activeIngredients: formatMapaComposition(mapaProduct.COMPOSICION),
+      mixRule: 'A verificar',
+      applicationInterval: summarizeMapaValues(usos.map(use => normalizeMapaFieldText(use.IntervaloAplicaciones)), ''),
+      applicationStage: buildMapaApplicationStage(mapaProduct),
+      allowedUses: uniqueClean(usos.map(use => use.Cultivo).concat(crop ? [crop] : [])),
+      allowedObjectives: uniqueClean(usos.map(use => use.Agente).concat(objective ? [objective] : [])),
+      nonPhytosanitary: false,
+      archived: false,
+      verifiedAt: null,
+      source: `MAPA reducido${sourceDate ? ` ${formatMapaDate(sourceDate)}` : ''}`,
+      notes: '',
+      mapaReference: {
+        sourceDate,
+        fileName: state.mapaBase?.meta?.fileName || '',
+        idProducto: datos.IdProducto ?? null,
+        registration: datos.Num_Registro || '',
+        estado: datos.Estado || '',
+        titular: datos.Titular || '',
+        fabricante: datos.Fabricante || '',
+        formulado: datos.Formulado || '',
+        usos: usos.length
+      },
+      mapaRaw: deepClone(mapaProduct),
+      createdAt: now,
+      updatedAt: now
+    };
+    if (!product.name) product.name = fallbackName.trim();
+    if (!product.allowedUses.length) product.allowedUses = crop ? [crop.trim()] : [];
+    if (!product.allowedObjectives.length) product.allowedObjectives = objective ? [objective.trim()] : [];
+    return product;
+  }
+
+  function findMapaProductMatches(query) {
+    const base = state.mapaBase;
+    if (!base?.products?.length) return [];
+    const needle = normalizeText(query);
+    if (!needle) return [];
+    const matches = [];
+    for (const product of base.products) {
+      const tokens = mapaSearchTokens(product);
+      let score = Number.MAX_SAFE_INTEGER;
+      for (const token of tokens) {
+        const normalized = normalizeText(token.value);
+        if (!normalized) continue;
+        if (normalized === needle) score = Math.min(score, token.priority);
+        else if (normalized.startsWith(needle)) score = Math.min(score, token.priority + 10);
+        else if (normalized.includes(needle)) score = Math.min(score, token.priority + 20);
+      }
+      if (score !== Number.MAX_SAFE_INTEGER) matches.push({ product, score });
+    }
+    return matches
+      .sort((a, b) => a.score - b.score || mapaProductName(a.product).localeCompare(mapaProductName(b.product), 'es'))
+      .slice(0, 20);
+  }
+
+  function mapaSearchTokens(product) {
+    const datos = product.DATOSPRODUCTO || {};
+    const tokens = [
+      { value: datos.Num_Registro, priority: 0 },
+      { value: datos.Nombre, priority: 1 },
+      { value: datos.Formulado, priority: 8 }
+    ];
+    (product.OTROSNOMBRES || []).forEach(item => tokens.push({ value: item.Nombre, priority: 2 }));
+    (product.OTRASDENOMINACIONES || []).forEach(item => tokens.push({ value: item.Nombre_Origen, priority: 3 }));
+    (product.COMPOSICION || []).forEach(item => tokens.push({ value: item['Nombre Sustancia'], priority: 6 }));
+    return tokens;
+  }
+
+  function isExactMapaMatch(query, product) {
+    const needle = normalizeText(query);
+    return mapaSearchTokens(product).some(token => normalizeText(token.value) === needle);
+  }
+
+  async function chooseMapaProductMatch(query, matches) {
+    const exact = matches.filter(match => isExactMapaMatch(query, match.product));
+    if (exact.length === 1) return exact[0].product;
+    const visible = matches.slice(0, 10);
+    const options = visible.map((match, idx) => {
+      const datos = match.product.DATOSPRODUCTO || {};
+      const label = `${datos.Nombre || 'Producto MAPA'} · Reg. ${datos.Num_Registro || '—'} · ${datos.Estado || '—'}`;
+      return `<option value="${idx}">${escapeHtml(label)}</option>`;
+    }).join('');
+    const body = `
+      <p>Se han encontrado coincidencias en la base MAPA reducida para <strong>${escapeHtml(query)}</strong>.</p>
+      <div class="field"><span>Producto MAPA</span><select id="mapaProductMatch">${options}</select></div>
+      <p class="muted">La ficha se creará como A verificar, con datos MAPA prerrellenados para revisión.</p>
+    `;
+    const decision = await choiceDialog('Coincidencias MAPA', body, [
+      { id: 'use', label: 'Usar MAPA', className: 'primary-btn' },
+      { id: 'provisional', label: 'Crear provisional', className: 'secondary-btn' },
+      { id: 'cancel', label: 'Cancelar', className: 'ghost-btn' }
+    ], true);
+    if (decision === 'cancel') { els.modalHost.innerHTML = ''; return null; }
+    if (decision === 'provisional') { els.modalHost.innerHTML = ''; return 'PROVISIONAL'; }
+    const idx = Number(document.getElementById('mapaProductMatch')?.value || 0);
+    els.modalHost.innerHTML = '';
+    return visible[idx]?.product || null;
+  }
+
+  function mapaProductName(product) {
+    return product?.DATOSPRODUCTO?.Nombre || '';
+  }
+
+  function findProductByRegistration(registration) {
+    const needle = normalizeText(registration);
+    if (!needle) return null;
+    return state.products.find(product => normalizeText(product.registration) === needle);
+  }
+
+  function formatMapaComposition(composition) {
+    const values = (Array.isArray(composition) ? composition : []).map(item => {
+      const name = normalizeMapaFieldText(item['Nombre Sustancia'] || item.NombreUE);
+      const concentration = Number(item.Concentracion);
+      const unit = normalizeMapaFieldText(item.DescripcionNota);
+      return [name, Number.isFinite(concentration) ? formatDocNumber(concentration) : '', unit].filter(Boolean).join(' ');
+    }).filter(Boolean);
+    return values.length ? values.join('\n') : 'A verificar';
+  }
+
+  function formatMapaDoseReference(use) {
+    const min = Number(use.Dosis_Min);
+    const max = Number(use.Dosis_Max);
+    const unit = normalizeMapaFieldText(use['Unidad Medida dosis']);
+    if (Number.isFinite(min) && Number.isFinite(max) && min > 0 && max > 0) {
+      return nearlyEqual(min, max) ? `${formatDocNumber(min)} ${unit}`.trim() : `${formatDocNumber(min)}-${formatDocNumber(max)} ${unit}`.trim();
+    }
+    if (Number.isFinite(min) && min > 0) return `${formatDocNumber(min)} ${unit}`.trim();
+    if (Number.isFinite(max) && max > 0) return `${formatDocNumber(max)} ${unit}`.trim();
+    return '';
+  }
+
+  function formatMapaVolumeReference(use) {
+    const min = Number(use.Volumen_Min);
+    const max = Number(use.VolumenMax);
+    const unit = normalizeMapaFieldText(use['Unidades Volumen']) || 'L/ha';
+    if (Number.isFinite(min) && Number.isFinite(max) && min > 0 && max > 0) {
+      return nearlyEqual(min, max) ? `${formatDocNumber(min)} ${unit}`.trim() : `${formatDocNumber(min)}-${formatDocNumber(max)} ${unit}`.trim();
+    }
+    const text = normalizeMapaFieldText(use['Volumen Caldo']);
+    return text;
+  }
+
+  function summarizeMapaValues(values, fallback) {
+    const unique = uniqueClean(values.map(normalizeMapaFieldText));
+    if (!unique.length) return fallback;
+    if (unique.length === 1) return unique[0];
+    const visible = unique.slice(0, 6);
+    const suffix = unique.length > visible.length ? `\n+ ${unique.length - visible.length} valor(es) más en usos MAPA.` : '';
+    return visible.join('\n') + suffix;
+  }
+
+  function summarizeMapaMaxApplications(usos) {
+    const values = usos.map(use => parseMapaMaxApplications(use.Aplicaciones)).filter(value => Number.isFinite(value));
+    const unique = Array.from(new Set(values));
+    return unique.length === 1 ? unique[0] : null;
+  }
+
+  function parseMapaMaxApplications(value) {
+    const numbers = String(value || '').match(/\d+/g);
+    if (!numbers?.length) return null;
+    return Math.max(...numbers.map(Number));
+  }
+
+  function buildMapaApplicationStage(product) {
+    const datos = product.DATOSPRODUCTO || {};
+    const usos = Array.isArray(product.USOS) ? product.USOS : [];
+    const parts = [];
+    const estado = normalizeMapaFieldText(datos.Estado);
+    const titular = normalizeMapaFieldText(datos.Titular);
+    const fabricante = normalizeMapaFieldText(datos.Fabricante);
+    const formulado = normalizeMapaFieldText(datos.Formulado);
+    const condicionGeneral = normalizeMapaFieldText(datos.Condicionamiento);
+    const bbch = summarizeMapaValues(usos.map(use => normalizeMapaFieldText(use.Bbch)), '');
+    const condicionUsos = summarizeMapaValues(usos.map(use => normalizeMapaFieldText(use.CondicionamientoEspecifico)), '');
+    if (estado || titular || fabricante || formulado) parts.push([`Estado MAPA: ${estado || '—'}`, `Titular: ${titular || '—'}`, `Fabricante: ${fabricante || '—'}`, `Formulado: ${formulado || '—'}`].join('\n'));
+    if (bbch) parts.push(`BBCH / estadio:\n${bbch}`);
+    if (condicionGeneral) parts.push(`Condicionamiento general MAPA:\n${condicionGeneral}`);
+    if (condicionUsos) parts.push(`Condicionamiento específico usos MAPA:\n${condicionUsos}`);
+    return parts.join('\n\n');
+  }
+
+  function uniqueClean(values) {
+    const out = [];
+    const seen = new Set();
+    values.forEach(value => {
+      const text = normalizeMapaFieldText(value);
+      if (!text) return;
+      const key = normalizeText(text);
+      if (seen.has(key)) return;
+      seen.add(key);
+      out.push(text);
+    });
+    return out;
+  }
+
+  function normalizeMapaFieldText(value) {
+    return String(value ?? '').replace(/\r\n?/g, '\n').replace(/[ \t]+/g, ' ').trim();
   }
 
   function buildSnapshot(product) {
@@ -1763,9 +2021,10 @@
   }
 
   async function createCatalogProduct() {
+    const mapaLoaded = Boolean(state.mapaBase?.products?.length);
     const body = `
-      <div class="field"><span>Nombre del producto</span><input id="newCatalogProductName" autocomplete="off" placeholder="Escribe el nombre comercial"></div>
-      <p class="muted">Se añadirá al catálogo como <strong>A verificar</strong>. Después podrás completar su ficha.</p>
+      <div class="field"><span>Nombre del producto</span><input id="newCatalogProductName" autocomplete="off" placeholder="Escribe el nombre comercial o nº de registro"></div>
+      <p class="muted">${mapaLoaded ? 'Si existe coincidencia en la base MAPA reducida, se creará la ficha con prerrelleno asistido y quedará como <strong>A verificar</strong>.' : 'Se añadirá al catálogo como <strong>A verificar</strong>. Después podrás completar su ficha.'}</p>
     `;
     const decision = await choiceDialog('Nuevo producto', body, [
       { id: 'create', label: 'Crear producto', className: 'primary-btn' },
@@ -1781,12 +2040,22 @@
       toast('Ese producto ya existe en el catálogo.');
       return createCatalogProduct();
     }
-    const product = createProvisionalProduct(name, '', '');
+    const product = await createProductFromInputWithMapa(name, '', '', false);
+    if (!product) return;
+    const existingByName = findProductByName(product.name);
+    const existingByRegistration = product.registration && product.registration !== 'A verificar' ? findProductByRegistration(product.registration) : null;
+    if (existingByName || existingByRegistration) {
+      els.modalHost.innerHTML = '';
+      toast('Ese producto ya existe en el catálogo.');
+      render();
+      return;
+    }
     state.products.push(product);
     await saveState();
     els.modalHost.innerHTML = '';
-    toast('Producto añadido al catálogo.');
+    toast(product.mapaReference ? 'Producto añadido con datos MAPA. Revisar ficha.' : 'Producto añadido al catálogo.');
     render();
+    return showEditProductModal(product.id);
   }
 
   async function deleteCatalogProduct(id) {
@@ -4157,6 +4426,129 @@ Máx. ${formatDocNumber(max)} L/ha` : '',
       ]
     );
     if (decision === 'replace') target[idx] = item;
+  }
+
+
+  async function readMapaBaseFile(file) {
+    if (!file) return;
+    try {
+      const text = file.name.toLowerCase().endsWith('.zip') ? await extractJsonFromZipFile(file) : await file.text();
+      const payload = JSON.parse(text);
+      const mapaBase = normalizeMapaBasePayload(payload, file.name);
+      const ok = await confirmDialog(
+        'Cargar base MAPA reducida',
+        `<p>Se guardará localmente esta base MAPA y sustituirá la anterior si existía.</p><div class="kv-grid"><div class="kv"><strong>Fecha MAPA</strong><span>${escapeHtml(formatMapaDate(mapaBase.meta.sourceDate))}</span></div><div class="kv"><strong>Productos</strong><span>${escapeHtml(String(mapaBase.meta.productCount))}</span></div><div class="kv"><strong>Usos vid</strong><span>${escapeHtml(String(mapaBase.meta.useCount))}</span></div></div>`,
+        'Cargar base',
+        'Cancelar'
+      );
+      if (!ok) return;
+      state.mapaBase = mapaBase;
+      state.history.imports.push({ mode: 'mapa-reducido', at: new Date().toISOString(), fileName: file.name, sourceDate: mapaBase.meta.sourceDate, products: mapaBase.meta.productCount, uses: mapaBase.meta.useCount });
+      await saveState();
+      toast('Base MAPA reducida cargada.');
+      render();
+    } catch (error) {
+      console.error(error);
+      showInfoModal('Base MAPA no cargada', `<p>${escapeHtml(error.message || 'No se pudo leer la base MAPA reducida.')}</p>`);
+    }
+  }
+
+  function normalizeMapaBasePayload(payload, fileName) {
+    const products = Array.isArray(payload?.Productos) ? payload.Productos : [];
+    if (!products.length) throw new Error('El archivo no contiene una lista Productos válida del MAPA reducido.');
+    const meta = payload.METADATOS || {};
+    const sourceDate = meta.fecha_fichero_fuente || extractMapaDateFromFileName(fileName) || '';
+    return {
+      meta: {
+        fileName,
+        sourceDate,
+        importedAt: new Date().toISOString(),
+        source: meta.fuente || 'MAPA reducido',
+        generatedAt: meta.fecha_generacion_reducido || '',
+        productCount: products.length,
+        useCount: countMapaUses(products),
+        usesByCrop: meta.usos_por_cultivo || countMapaUsesByCrop(products)
+      },
+      products
+    };
+  }
+
+  function countMapaUses(products) {
+    return (Array.isArray(products) ? products : []).reduce((total, product) => total + (Array.isArray(product.USOS) ? product.USOS.length : 0), 0);
+  }
+
+  function countMapaUsesByCrop(products) {
+    return (Array.isArray(products) ? products : []).reduce((acc, product) => {
+      (product.USOS || []).forEach(use => {
+        const crop = use.Cultivo || 'Sin cultivo';
+        acc[crop] = (acc[crop] || 0) + 1;
+      });
+      return acc;
+    }, {});
+  }
+
+  function extractMapaDateFromFileName(fileName) {
+    const match = String(fileName || '').match(/(20\d{2})[_-](\d{2})[_-](\d{2})/);
+    return match ? `${match[1]}-${match[2]}-${match[3]}` : '';
+  }
+
+  function formatMapaDate(value) {
+    if (!value) return 'No consta';
+    const iso = String(value).slice(0, 10).replace(/\//g, '-');
+    if (/^\d{4}-\d{2}-\d{2}$/.test(iso)) return formatDate(iso);
+    return String(value);
+  }
+
+  async function extractJsonFromZipFile(file) {
+    const buffer = await file.arrayBuffer();
+    const view = new DataView(buffer);
+    const bytes = new Uint8Array(buffer);
+    const eocd = findZipEndOfCentralDirectory(view);
+    const totalEntries = view.getUint16(eocd + 10, true);
+    const centralOffset = view.getUint32(eocd + 16, true);
+    const decoder = new TextDecoder('utf-8');
+    const entries = [];
+    let pos = centralOffset;
+    for (let i = 0; i < totalEntries; i += 1) {
+      if (view.getUint32(pos, true) !== 0x02014b50) throw new Error('ZIP no legible: directorio central inválido.');
+      const method = view.getUint16(pos + 10, true);
+      const compressedSize = view.getUint32(pos + 20, true);
+      const nameLength = view.getUint16(pos + 28, true);
+      const extraLength = view.getUint16(pos + 30, true);
+      const commentLength = view.getUint16(pos + 32, true);
+      const localOffset = view.getUint32(pos + 42, true);
+      const name = decoder.decode(bytes.slice(pos + 46, pos + 46 + nameLength));
+      entries.push({ name, method, compressedSize, localOffset });
+      pos += 46 + nameLength + extraLength + commentLength;
+    }
+    const jsonEntries = entries.filter(entry => entry.name.toLowerCase().endsWith('.json'));
+    if (!jsonEntries.length) throw new Error('El ZIP no contiene ningún JSON.');
+    jsonEntries.sort((a, b) => (a.name.toLowerCase().includes('pretty') ? 1 : 0) - (b.name.toLowerCase().includes('pretty') ? 1 : 0));
+    const entry = jsonEntries[0];
+    if (view.getUint32(entry.localOffset, true) !== 0x04034b50) throw new Error('ZIP no legible: cabecera local inválida.');
+    const nameLength = view.getUint16(entry.localOffset + 26, true);
+    const extraLength = view.getUint16(entry.localOffset + 28, true);
+    const start = entry.localOffset + 30 + nameLength + extraLength;
+    const compressed = bytes.slice(start, start + entry.compressedSize);
+    let output;
+    if (entry.method === 0) output = compressed;
+    else if (entry.method === 8) output = await inflateZipDeflate(compressed);
+    else throw new Error('El ZIP usa un método de compresión no compatible.');
+    return decoder.decode(output);
+  }
+
+  function findZipEndOfCentralDirectory(view) {
+    const min = Math.max(0, view.byteLength - 65557);
+    for (let pos = view.byteLength - 22; pos >= min; pos -= 1) {
+      if (view.getUint32(pos, true) === 0x06054b50) return pos;
+    }
+    throw new Error('ZIP no legible: no se encontró cierre de directorio.');
+  }
+
+  async function inflateZipDeflate(bytes) {
+    if (!('DecompressionStream' in window)) throw new Error('Este navegador no puede descomprimir ZIP aquí. Extrae el JSON y cárgalo directamente.');
+    const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+    return new Uint8Array(await new Response(stream).arrayBuffer());
   }
 
   async function readImportFile(file) {

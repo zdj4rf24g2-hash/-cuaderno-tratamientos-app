@@ -1,0 +1,27 @@
+APP CUADERNO DE TRATAMIENTOS · V2.12
+
+Base de trabajo: APP_CUADERNO_TRATAMIENTOS_V2_11_COMPLETA_SIN_SUBCARPETAS.zip
+
+Archivos listos para publicar en GitHub Pages desde la raíz del repositorio:
+- index.html
+- styles.css
+- app.js
+- manifest.webmanifest
+- sw.js
+- icon-192.png
+- icon-512.png
+
+Cambio solicitado aplicado en V2.12:
+- Añadida carga local de Base MAPA reducida desde Más > Importación.
+- La app muestra fecha MAPA, número de productos, número de usos de vid y fichero cargado.
+- La base MAPA reducida queda guardada localmente en el dispositivo para búsquedas futuras.
+- Al crear un nuevo producto, la app busca coincidencias en la base MAPA reducida y permite crear la ficha con datos MAPA prerrellenados, manteniéndola como A verificar.
+- Si no hay coincidencia MAPA, se conserva el flujo de producto provisional.
+- Tras crear un producto desde Catálogo, se abre directamente la edición de ficha para completarlo.
+
+Ajustes técnicos estrictamente necesarios:
+- Actualización de versión visible, APP_VERSION, service worker y CACHE_NAME a V2.12.
+- Añadido lector local de JSON y ZIP para la base MAPA reducida.
+
+No se han añadido datos reales incrustados en el código.
+El estado inicial mantiene products: [], treatments: [], alerts: [] y drafts: [].
