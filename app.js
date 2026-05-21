@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const APP_VERSION = '2.17';
+  const APP_VERSION = '2.18';
   const SCHEMA_VERSION = '1.0.0';
   const DB_NAME = 'cuaderno-tratamientos-pwa-v1';
   const DB_STORE = 'state';
@@ -65,7 +65,8 @@
     morePanel: null,
     currentDraftId: null,
     importPreview: null,
-    searchQuery: ''
+    searchQuery: '',
+    catalogSelectedProductId: ''
   };
 
   const els = {};
@@ -124,6 +125,7 @@
       } else if (target === 'product') {
         ui.screen = 'more';
         ui.morePanel = 'catalog';
+        ui.catalogSelectedProductId = id || '';
       } else if (target === 'alert') {
         ui.screen = 'alerts';
       }
@@ -239,7 +241,7 @@
 
   function registerServiceWorker() {
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('sw.js?v=2.17', { updateViaCache: 'none' }).then(registration => registration.update()).catch(error => console.warn('SW no registrado', error));
+      navigator.serviceWorker.register('sw.js?v=2.18', { updateViaCache: 'none' }).then(registration => registration.update()).catch(error => console.warn('SW no registrado', error));
     }
   }
 
@@ -754,10 +756,20 @@
   }
 
   function renderCatalog() {
-    const products = state.products.slice().sort((a, b) => a.name.localeCompare(b.name, 'es'));
+    const sortedProducts = state.products.slice().sort((a, b) => a.name.localeCompare(b.name, 'es'));
+    const selectedProduct = ui.catalogSelectedProductId ? findProduct(ui.catalogSelectedProductId) : null;
+    if (ui.catalogSelectedProductId && !selectedProduct) ui.catalogSelectedProductId = '';
+    const products = selectedProduct ? [selectedProduct] : sortedProducts;
     return `
       ${renderCatalogHeader()}
       <section class="section-card">
+        ${selectedProduct ? `
+          <div class="notice compact" style="margin-bottom:12px">
+            <strong>Resultado seleccionado: ${escapeHtml(selectedProduct.name)}</strong>
+            <p>${escapeHtml(selectedProduct.registration || 'Sin registro')}</p>
+            <div class="button-row" style="margin-top:10px"><button class="ghost-btn compact" data-action="clear-catalog-selection">Ver todos los productos</button></div>
+          </div>
+        ` : ''}
         <div class="button-row" style="margin-bottom:12px">
           <button class="primary-btn" data-action="new-catalog-product">Nuevo producto</button>
         </div>
@@ -988,7 +1000,11 @@
     if (action === 'go-alerts') return navigate('alerts');
     if (action === 'go-import') { ui.screen = 'more'; ui.morePanel = 'import'; syncNav(); return render(); }
     if (action === 'open-drafts') { ui.screen = 'more'; ui.morePanel = 'drafts'; syncNav(); return render(); }
-    if (action === 'open-more') { ui.morePanel = btn.dataset.panel; return render(); }
+    if (action === 'open-more') {
+      ui.morePanel = btn.dataset.panel;
+      if (ui.morePanel === 'catalog') ui.catalogSelectedProductId = '';
+      return render();
+    }
     if (action === 'back-more') { ui.morePanel = null; return render(); }
     if (action === 'start-draft') return startDraft();
     if (action === 'resume-draft') { ui.currentDraftId = btn.dataset.id; ui.screen = 'new'; syncNav(); return render(); }
@@ -1007,6 +1023,7 @@
     if (action === 'view-product') return showProductModal(btn.dataset.id);
     if (action === 'edit-product') return showProductEditChoice(btn.dataset.id);
     if (action === 'new-catalog-product') return createCatalogProduct();
+    if (action === 'clear-catalog-selection') { ui.catalogSelectedProductId = ''; return render(); }
     if (action === 'delete-catalog-product') return deleteCatalogProduct(btn.dataset.id);
     if (action === 'save-applicator') return saveCampaignApplicator();
     if (action === 'run-self-check') return runSelfCheck();
@@ -2188,6 +2205,7 @@
     );
     if (!ok) return;
     state.products = state.products.filter(item => item.id !== id);
+    if (ui.catalogSelectedProductId === id) ui.catalogSelectedProductId = '';
     await saveState();
     toast('Producto eliminado del catálogo.');
     render();
@@ -2219,11 +2237,16 @@
     `;
     const decision = await choiceDialog(product.name, body, [
       { id: 'edit', label: 'Editar / completar ficha', className: 'secondary-btn' },
+      { id: 'delete', label: 'Eliminar producto', className: 'danger-btn' },
       { id: 'close', label: 'Cerrar', className: 'primary-btn' }
     ], true);
     if (decision === 'edit') {
       els.modalHost.innerHTML = '';
       return showProductEditChoice(id);
+    }
+    if (decision === 'delete') {
+      els.modalHost.innerHTML = '';
+      return deleteCatalogProduct(id);
     }
     els.modalHost.innerHTML = '';
   }

@@ -1,0 +1,19 @@
+APP CUADERNO DE TRATAMIENTOS · V2.18
+
+Base de partida:
+- APP_CUADERNO_TRATAMIENTOS_V2_17_COMPLETA_SIN_SUBCARPETAS.zip
+
+Cambio solicitado aplicado en V2.18:
+- Al pulsar un resultado de producto en la búsqueda superior, el catálogo muestra solo la ficha de ese producto.
+- Se añade en esa vista un botón para volver a ver todos los productos.
+- Dentro de la ficha detallada del producto se incorpora la posibilidad de editar/completar la ficha o eliminar el producto.
+
+Control de alcance:
+- No se ha modificado la presentación general, colores, navegación, cuaderno, alertas, importación MAPA ni registro de tratamientos.
+- No se han añadido productos ni tratamientos reales incrustados.
+
+Comprobaciones:
+- APP_VERSION actualizado a V2.18.
+- Versión visible actualizada a V2.18.
+- Service worker y CACHE_NAME actualizados a V2.18.
+- ZIP previsto sin subcarpetas.
