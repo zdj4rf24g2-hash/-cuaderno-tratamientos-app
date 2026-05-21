@@ -1,0 +1,24 @@
+APP CUADERNO DE TRATAMIENTOS · V2.13
+
+Base de trabajo: APP_CUADERNO_TRATAMIENTOS_V2_12_COMPLETA_SIN_SUBCARPETAS.zip
+
+Archivos listos para publicar en GitHub Pages desde la raíz del repositorio:
+- index.html
+- styles.css
+- app.js
+- manifest.webmanifest
+- sw.js
+- icon-192.png
+- icon-512.png
+
+Cambio solicitado aplicado en V2.13:
+- La gestión de la Base MAPA reducida se traslada al recuadro de Catálogo de productos.
+- En el recuadro de Catálogo de productos se muestra el estado de la Base MAPA reducida, su fecha, productos, usos de vid y fichero cargado.
+- El botón Cargar base MAPA reducida queda dentro del recuadro de Catálogo de productos.
+- Se retira la tarjeta de Base MAPA reducida del panel Importación.
+
+Ajustes técnicos estrictamente necesarios:
+- Actualización de versión visible, APP_VERSION, service worker y CACHE_NAME a V2.13.
+
+No se han añadido datos reales incrustados en el código.
+El estado inicial mantiene products: [], treatments: [], alerts: [] y drafts: [].

@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const APP_VERSION = '2.12';
+  const APP_VERSION = '2.13';
   const SCHEMA_VERSION = '1.0.0';
   const DB_NAME = 'cuaderno-tratamientos-pwa-v1';
   const DB_STORE = 'state';
@@ -238,7 +238,7 @@
 
   function registerServiceWorker() {
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('sw.js?v=2.12', { updateViaCache: 'none' }).then(registration => registration.update()).catch(error => console.warn('SW no registrado', error));
+      navigator.serviceWorker.register('sw.js?v=2.13', { updateViaCache: 'none' }).then(registration => registration.update()).catch(error => console.warn('SW no registrado', error));
     }
   }
 
@@ -755,12 +755,41 @@
   function renderCatalog() {
     const products = state.products.slice().sort((a, b) => a.name.localeCompare(b.name, 'es'));
     return `
-      ${renderBackToMore('Catálogo de productos', 'Verificados, pendientes, activos y archivados.')}
+      ${renderCatalogHeader()}
       <section class="section-card">
         <div class="button-row" style="margin-bottom:12px">
           <button class="primary-btn" data-action="new-catalog-product">Nuevo producto</button>
         </div>
         ${products.length ? `<div class="product-list">${products.map(renderProductCard).join('')}</div>` : renderEmpty('Catálogo vacío', 'Importa la carga inicial o crea productos provisionales desde Nuevo.')}
+      </section>
+    `;
+  }
+
+  function renderCatalogHeader() {
+    const mapa = state.mapaBase;
+    const loaded = Boolean(mapa?.products?.length);
+    const sourceDate = loaded ? formatMapaDate(mapa.meta?.sourceDate) : '—';
+    const productCount = loaded ? String(mapa.meta?.productCount ?? mapa.products.length) : '0';
+    const useCount = loaded ? String(mapa.meta?.useCount ?? countMapaUses(mapa.products)) : '0';
+    const fileName = loaded ? (mapa.meta?.fileName || 'Base MAPA reducida') : 'No cargada';
+    return `
+      <section class="section-card">
+        <div class="section-header">
+          <div>
+            <h2>Catálogo de productos</h2>
+            <p>Verificados, pendientes, activos y archivados.</p>
+            <p class="muted">Base MAPA reducida: <strong>${loaded ? 'cargada' : 'no cargada'}</strong> · Fecha MAPA: ${escapeHtml(sourceDate)}</p>
+          </div>
+          <button class="ghost-btn compact" data-action="back-more">Volver</button>
+        </div>
+        <div class="kv-grid" style="margin-top:12px">
+          <div class="kv"><strong>Productos MAPA</strong><span>${escapeHtml(productCount)}</span></div>
+          <div class="kv"><strong>Usos vid</strong><span>${escapeHtml(useCount)}</span></div>
+          <div class="kv"><strong>Fichero</strong><span>${escapeHtml(fileName)}</span></div>
+        </div>
+        <div class="button-row" style="margin-top:12px">
+          <label class="secondary-btn" style="display:block;text-align:center">Cargar base MAPA reducida<input id="mapaFile" type="file" accept=".json,.zip,application/json,application/zip" class="hidden" data-action-change="mapa-file"></label>
+        </div>
       </section>
     `;
   }
@@ -854,7 +883,6 @@
     const preview = ui.importPreview;
     return `
       ${renderBackToMore('Importación', 'Carga inicial estructurada, CSV, XLS compatible y JSON.')}
-      ${renderMapaBaseSection()}
       <section class="section-card">
         <label class="primary-btn" style="display:block;text-align:center">Seleccionar archivo<input id="importFile" type="file" accept=".json,.csv,.xls,.xlsx,application/json,text/csv,application/vnd.ms-excel" class="hidden" data-action-change="import-file"></label>
         <p class="muted">La carga privada de tratamientos debe importarse localmente. La app pública no la contiene.</p>
