@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const APP_VERSION = '2.13';
+  const APP_VERSION = '2.14';
   const SCHEMA_VERSION = '1.0.0';
   const DB_NAME = 'cuaderno-tratamientos-pwa-v1';
   const DB_STORE = 'state';
@@ -778,17 +778,18 @@
           <div>
             <h2>Catálogo de productos</h2>
             <p>Verificados, pendientes, activos y archivados.</p>
-            <p class="muted">Base MAPA reducida: <strong>${loaded ? 'cargada' : 'no cargada'}</strong> · Fecha MAPA: ${escapeHtml(sourceDate)}</p>
+            <div class="kv-grid" style="margin-top:12px">
+              <div class="kv"><strong>Base MAPA</strong><span>${loaded ? 'Cargada' : 'No cargada'}</span></div>
+              <div class="kv"><strong>Fecha MAPA</strong><span>${escapeHtml(sourceDate)}</span></div>
+              <div class="kv"><strong>Productos MAPA</strong><span>${escapeHtml(productCount)}</span></div>
+              <div class="kv"><strong>Usos vid</strong><span>${escapeHtml(useCount)}</span></div>
+              <div class="kv"><strong>Fichero</strong><span>${escapeHtml(fileName)}</span></div>
+            </div>
+            <div class="button-row" style="margin-top:12px">
+              <label class="secondary-btn" style="display:block;text-align:center">Cargar base MAPA reducida<input id="mapaFile" type="file" accept=".json,application/json" class="hidden" data-action-change="mapa-file"></label>
+            </div>
           </div>
           <button class="ghost-btn compact" data-action="back-more">Volver</button>
-        </div>
-        <div class="kv-grid" style="margin-top:12px">
-          <div class="kv"><strong>Productos MAPA</strong><span>${escapeHtml(productCount)}</span></div>
-          <div class="kv"><strong>Usos vid</strong><span>${escapeHtml(useCount)}</span></div>
-          <div class="kv"><strong>Fichero</strong><span>${escapeHtml(fileName)}</span></div>
-        </div>
-        <div class="button-row" style="margin-top:12px">
-          <label class="secondary-btn" style="display:block;text-align:center">Cargar base MAPA reducida<input id="mapaFile" type="file" accept=".json,.zip,application/json,application/zip" class="hidden" data-action-change="mapa-file"></label>
         </div>
       </section>
     `;
@@ -911,7 +912,7 @@
           <div class="kv"><strong>Fichero</strong><span>${escapeHtml(fileName)}</span></div>
         </div>
         <div class="button-row" style="margin-top:12px">
-          <label class="secondary-btn" style="display:block;text-align:center">Cargar base MAPA reducida<input id="mapaFile" type="file" accept=".json,.zip,application/json,application/zip" class="hidden" data-action-change="mapa-file"></label>
+          <label class="secondary-btn" style="display:block;text-align:center">Cargar base MAPA reducida<input id="mapaFile" type="file" accept=".json,application/json" class="hidden" data-action-change="mapa-file"></label>
         </div>
         <p class="muted">La base se guarda localmente en este dispositivo. Si se carga una base más reciente, sustituye a la anterior.</p>
       </section>

@@ -1,0 +1,22 @@
+APP CUADERNO DE TRATAMIENTOS · V2.14
+
+Base de trabajo: APP_CUADERNO_TRATAMIENTOS_V2_13_COMPLETA_SIN_SUBCARPETAS.zip
+
+Archivos listos para publicar en GitHub Pages desde la raíz del repositorio:
+- index.html
+- styles.css
+- app.js
+- manifest.webmanifest
+- sw.js
+- icon-192.png
+- icon-512.png
+
+Cambio solicitado aplicado en V2.14:
+- El estado de la Base MAPA reducida, su fecha, productos, usos de vid, fichero y el botón de carga quedan visibles dentro del recuadro Catálogo de productos, justo después del texto existente del recuadro.
+- La carga MAPA queda orientada a archivo JSON, al ser el formato operativo confirmado en iPhone.
+
+Ajustes técnicos estrictamente necesarios:
+- Actualización de versión visible, APP_VERSION, service worker y CACHE_NAME a V2.14.
+
+No se han añadido datos reales incrustados en el código.
+El estado inicial mantiene products: [], treatments: [], alerts: [] y drafts: [].
