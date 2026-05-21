@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const APP_VERSION = '2.15';
+  const APP_VERSION = '2.14';
   const SCHEMA_VERSION = '1.0.0';
   const DB_NAME = 'cuaderno-tratamientos-pwa-v1';
   const DB_STORE = 'state';
@@ -135,7 +135,6 @@
     els.screen.addEventListener('input', handleScreenInput);
     els.screen.addEventListener('change', handleScreenChange);
     els.modalHost.addEventListener('click', handleModalHostClick);
-    els.modalHost.addEventListener('input', handleModalHostInput);
     els.modalHost.addEventListener('change', handleModalHostChange);
   }
 
@@ -239,7 +238,7 @@
 
   function registerServiceWorker() {
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('sw.js?v=2.15', { updateViaCache: 'none' }).then(registration => registration.update()).catch(error => console.warn('SW no registrado', error));
+      navigator.serviceWorker.register('sw.js?v=2.13', { updateViaCache: 'none' }).then(registration => registration.update()).catch(error => console.warn('SW no registrado', error));
     }
   }
 
@@ -1020,7 +1019,6 @@
     const btn = event.target.closest('[data-modal-action]');
     if (!btn) return;
     const action = btn.dataset.modalAction;
-    if (action === 'select-mapa-suggestion') return selectNewCatalogMapaSuggestion(btn);
     if (action === 'view-product-doc') return showProductDocumentViewer(btn.dataset.productId, btn.dataset.docId);
     if (action === 'zoom-product-doc-image') return showProductImageZoomViewer(btn.dataset.productId, btn.dataset.docId);
     if (action === 'delete-product-doc') return deleteProductDocument(btn.dataset.productId, btn.dataset.docId);
@@ -1028,10 +1026,6 @@
       els.modalHost.innerHTML = '';
       return showProductDocumentIntakeModal(btn.dataset.productId);
     }
-  }
-
-  function handleModalHostInput(event) {
-    if (event.target?.id === 'newCatalogProductName') return updateNewCatalogProductSuggestions(event.target);
   }
 
   function handleModalHostChange(event) {
@@ -2055,81 +2049,18 @@
     };
   }
 
-  function updateNewCatalogProductSuggestions(input) {
-    const box = document.getElementById('newCatalogProductSuggestions');
-    if (!box) return;
-    input.dataset.mapaSelectedId = '';
-    input.dataset.mapaSelectedRegistration = '';
-    input.dataset.mapaSelectedName = '';
-    const query = input.value.trim();
-    if (query.length < 2) {
-      box.innerHTML = '';
-      box.classList.add('hidden');
-      return;
-    }
-    const matches = findMapaProductMatches(query).slice(0, 8);
-    if (!matches.length) {
-      box.innerHTML = '<div class="search-result"><strong>Sin coincidencias MAPA</strong><small>Puedes seguir escribiendo o crear el producto provisional.</small></div>';
-      box.classList.remove('hidden');
-      return;
-    }
-    box.innerHTML = matches.map(match => {
-      const datos = match.product.DATOSPRODUCTO || {};
-      const idProducto = datos.IdProducto ?? '';
-      const nombre = datos.Nombre || 'Producto MAPA';
-      const registro = datos.Num_Registro || '';
-      const estado = datos.Estado || '—';
-      return `<button type="button" class="search-result" data-modal-action="select-mapa-suggestion" data-mapa-id="${escapeAttr(String(idProducto))}" data-mapa-registration="${escapeAttr(String(registro))}" data-mapa-name="${escapeAttr(String(nombre))}"><strong>${escapeHtml(nombre)}</strong><small>Reg. ${escapeHtml(String(registro || '—'))} · ${escapeHtml(String(estado || '—'))}</small></button>`;
-    }).join('');
-    box.classList.remove('hidden');
-  }
-
-  function selectNewCatalogMapaSuggestion(btn) {
-    const input = document.getElementById('newCatalogProductName');
-    const box = document.getElementById('newCatalogProductSuggestions');
-    if (!input) return;
-    input.value = btn.dataset.mapaName || '';
-    input.dataset.mapaSelectedId = btn.dataset.mapaId || '';
-    input.dataset.mapaSelectedRegistration = btn.dataset.mapaRegistration || '';
-    input.dataset.mapaSelectedName = btn.dataset.mapaName || '';
-    if (box) {
-      box.innerHTML = '';
-      box.classList.add('hidden');
-    }
-    input.focus({ preventScroll: true });
-  }
-
-  function getSelectedNewCatalogMapaProduct(input) {
-    if (!input || !state.mapaBase?.products?.length) return null;
-    const selectedName = input.dataset.mapaSelectedName || '';
-    const currentName = input.value.trim();
-    if (!selectedName || normalizeText(currentName) !== normalizeText(selectedName)) return null;
-    const selectedId = input.dataset.mapaSelectedId || '';
-    const selectedRegistration = input.dataset.mapaSelectedRegistration || '';
-    return state.mapaBase.products.find(product => {
-      const datos = product.DATOSPRODUCTO || {};
-      const id = String(datos.IdProducto ?? '');
-      const registration = String(datos.Num_Registro ?? '');
-      const name = String(datos.Nombre ?? '');
-      if (selectedId && id === selectedId) return true;
-      return normalizeText(registration) === normalizeText(selectedRegistration) && normalizeText(name) === normalizeText(selectedName);
-    }) || null;
-  }
-
   async function createCatalogProduct() {
     const mapaLoaded = Boolean(state.mapaBase?.products?.length);
     const body = `
       <div class="field"><span>Nombre del producto</span><input id="newCatalogProductName" autocomplete="off" placeholder="Escribe el nombre comercial o nº de registro"></div>
-      ${mapaLoaded ? '<div id="newCatalogProductSuggestions" class="search-results hidden" aria-live="polite"></div>' : ''}
-      <p class="muted">${mapaLoaded ? 'A medida que escribas, la app sugerirá productos de la base MAPA reducida. Selecciona una sugerencia para evitar errores tipográficos. La ficha se creará con prerrelleno asistido y quedará como <strong>A verificar</strong>.' : 'Se añadirá al catálogo como <strong>A verificar</strong>. Después podrás completar su ficha.'}</p>
+      <p class="muted">${mapaLoaded ? 'Si existe coincidencia en la base MAPA reducida, se creará la ficha con prerrelleno asistido y quedará como <strong>A verificar</strong>.' : 'Se añadirá al catálogo como <strong>A verificar</strong>. Después podrás completar su ficha.'}</p>
     `;
     const decision = await choiceDialog('Nuevo producto', body, [
       { id: 'create', label: 'Crear producto', className: 'primary-btn' },
       { id: 'cancel', label: 'Cancelar', className: 'ghost-btn' }
     ], true);
     if (decision !== 'create') { els.modalHost.innerHTML = ''; return; }
-    const input = document.getElementById('newCatalogProductName');
-    const name = input?.value?.trim() || '';
+    const name = document.getElementById('newCatalogProductName')?.value?.trim() || '';
     if (!name) {
       toast('Indica el nombre del producto.');
       return createCatalogProduct();
@@ -2138,8 +2069,7 @@
       toast('Ese producto ya existe en el catálogo.');
       return createCatalogProduct();
     }
-    const selectedMapaProduct = getSelectedNewCatalogMapaProduct(input);
-    const product = selectedMapaProduct ? createProductFromMapa(selectedMapaProduct, name, '', '') : await createProductFromInputWithMapa(name, '', '', false);
+    const product = await createProductFromInputWithMapa(name, '', '', false);
     if (!product) return;
     const existingByName = findProductByName(product.name);
     const existingByRegistration = product.registration && product.registration !== 'A verificar' ? findProductByRegistration(product.registration) : null;
